@@ -43,7 +43,7 @@ Client-only BepInEx plugin targeting `net472` for SPT 4.1.6 (EFT `0.16.9.40743`)
    - `UI/WorkshopGridView.cs`: Row-virtualized multi-column recipe grid (`WorkshopRecipeTile`) with sliding-window row preservation, identity-reused `HideoutItemView`s, and snapshot-guarded dynamic updates.
    - `UI/WorkshopInspectorPane.cs`: Right inspector with direct interactive 3D `CameraImage` + `WeaponPreview` (or normalized 2D fallback), unclipped product header/weight, normalized `HideoutItemViewFactory` material rows with `[反查]` reverse ingredient search + `[跳蚤]` flea buy, and adaptive craft dock (`开始/领完再造/取消/购齐缺料`).
    - `UI/HideoutWorkshopScreen.cs`: Full 3-column Tarkov-native Crafting Studio (`UIScreen`) with station switcher, generator quick toggle + fuel countdown, Handbook category tree, multi-facet filters, and single-frame event coalescing.
-   - `Patches/WorkshopUiPatch.cs`: Hooks `HideoutScreenOverlay` to replace built crafting station clicks with `HideoutWorkshopScreen`, adds `[工坊总览]`, handles `Escape`/scroll/WASD input, clears display cache on Hideout exit, and allows jumping to vanilla `AreaScreenSubstrate` via `[设施详情/升级]`.
+   - `Patches/WorkshopUiPatch.cs`: Hooks `HideoutScreenOverlay` to replace built crafting station clicks with `HideoutWorkshopScreen`, adds `[工坊总览]`, handles `Escape`/scroll/WASD input, clears display cache on Hideout exit, strips `EFilterType.OfferOwnerType` (`AnyOwnerType`) on Hideout `Buy` Ragfair jumps (`ProduceView.BuyMaterials` / `WorkshopInspectorPane`), and allows jumping to vanilla `AreaScreenSubstrate` via `[设施详情/升级]`.
 
 4. **Diagnostics**
    - `Patches/HideoutProfilerPatch.cs`:

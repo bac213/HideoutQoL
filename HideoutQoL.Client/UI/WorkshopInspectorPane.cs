@@ -895,8 +895,8 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
             _progressBarFill.rectTransform.anchorMax = new Vector2(pct01, 1f);
             _progressText.SetMonospaceText(
                 _entry.State == WorkshopRecipeState.Ready
-                    ? "✔ 制造已完成，等待领取"
-                    : $"⚙ 制造中 {Mathf.FloorToInt(pct01 * 100f)}%  ·  剩余 {WorkshopRecipeTile.FormatCompactDuration(_entry.RemainingSeconds)}",
+                    ? "制造已完成，等待领取"
+                    : $"制造中 {Mathf.FloorToInt(pct01 * 100f)}%  ·  剩余 {WorkshopRecipeTile.FormatCompactDuration(_entry.RemainingSeconds)}",
                 onlyDigits: true);
         }
 
@@ -1023,12 +1023,14 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
             return;
         }
 
-        _itemUiContext.ExternalRagfairSearch(new RagfairSearch(EFilterType.BuildItems, new BuildItemSearchValue
+        var search = new RagfairSearch(EFilterType.BuildItems, new BuildItemSearchValue
         {
             BuildName = string.Empty,
             BuildItems = buildItems,
             BuildCount = 1,
-        }));
+        });
+        Patches.WorkshopUiPatch.MarkHideoutRagfairSearch(search);
+        _itemUiContext.ExternalRagfairSearch(search);
     }
 
     private void BuySingleOnRagfair(string templateId, int count)
@@ -1038,12 +1040,14 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
             return;
         }
 
-        _itemUiContext.ExternalRagfairSearch(new RagfairSearch(EFilterType.BuildItems, new BuildItemSearchValue
+        var search = new RagfairSearch(EFilterType.BuildItems, new BuildItemSearchValue
         {
             BuildName = string.Empty,
             BuildItems = new Dictionary<string, int>(1) { { templateId, count } },
             BuildCount = 1,
-        }));
+        });
+        Patches.WorkshopUiPatch.MarkHideoutRagfairSearch(search);
+        _itemUiContext.ExternalRagfairSearch(search);
     }
 
     internal void ExecuteQuickPrimaryAction(WorkshopCatalogModel.RecipeEntry target)

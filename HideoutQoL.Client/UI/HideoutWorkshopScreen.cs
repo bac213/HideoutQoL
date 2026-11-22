@@ -1026,11 +1026,11 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         if (ready > 0)
         {
-            return $"✔{ready}";
+            return $"待领 {ready}";
         }
         if (producing > 0)
         {
-            return $"⚙{producing}";
+            return $"在造 {producing}";
         }
         return isOverview ? total.ToString() : $"{craftable}/{total}";
     }
@@ -1073,7 +1073,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         title.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
 
         TextMeshProUGUI badge = _tpl.CreateText(go.transform, "Badge", "", 12f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
-        EftUiTemplateCache.SetFixedLayout(badge.gameObject, width: 50f, height: 22f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(badge.gameObject, width: 58f, height: 22f, flexW: 0f, flexH: 0f);
 
         var row = new StationRowView
         {

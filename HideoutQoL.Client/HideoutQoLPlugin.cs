@@ -49,6 +49,7 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
     internal static ConfigEntry<bool> WorkshopShow3DPreview;
     internal static ConfigEntry<int> WorkshopGridColumns;
     internal static ConfigEntry<bool> WorkshopHideLockedByDefault;
+    internal static ConfigEntry<bool> WorkshopRagfairIncludeAllOwners;
 
     // 9. Diagnostics
     internal static ConfigEntry<bool> PerfLogging;
@@ -190,6 +191,11 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
             "4. Workshop UI", "WorkshopHideLockedByDefault", false,
             catWorkshop, "默认隐藏未解锁配方",
             "开启后打开工作台时默认勾选【隐藏未解锁】，只显示当前设施等级与任务允许制作的配方。");
+
+        WorkshopRagfairIncludeAllOwners = t.Bind(
+            "4. Workshop UI", "WorkshopRagfairIncludeAllOwners", true,
+            catWorkshop, "跳蚤购料包含玩家报价（不限商人）",
+            "从藏身处点击【购齐缺料】或【跳蚤】跳转购买时，自动取消原版默认的【仅显示商人】过滤，直接显示含玩家在内的全部跳蚤市场报价。");
 
         t.Advanced = true;
         const string catDiag = "9. 调试";

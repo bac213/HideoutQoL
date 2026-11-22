@@ -7,6 +7,7 @@ using EFT;
 using EFT.Hideout;
 using EFT.InputSystem;
 using EFT.UI;
+using EFT.UI.Ragfair;
 using HarmonyLib;
 using HideoutQoL.Client.UI;
 using UnityEngine;
@@ -42,8 +43,17 @@ internal static class WorkshopUiPatch
     private static HideoutWorkshopScreen _workshopScreen;
     private static DefaultUIButton _overviewButton;
 
+    private static RagfairSearch _pendingHideoutRagfairSearch;
+    private static float _pendingHideoutRagfairUntil = -1f;
+
     internal static bool IsWorkshopOpen =>
         _workshopScreen != null && _workshopScreen.gameObject.activeSelf;
+
+    internal static void MarkHideoutRagfairSearch(RagfairSearch search)
+    {
+        _pendingHideoutRagfairSearch = search;
+        _pendingHideoutRagfairUntil = Time.unscaledTime + 5f;
+    }
 
     internal static void Apply(Harmony harmony)
     {
@@ -77,7 +87,61 @@ internal static class WorkshopUiPatch
             AccessTools.Method(typeof(HideoutScreenOverlay), nameof(HideoutScreenOverlay.Close)),
             prefix: new HarmonyMethod(typeof(WorkshopUiPatch), nameof(OverlayClosePrefix)));
 
+        MethodInfo produceBuy = AccessTools.Method(typeof(ProduceView), nameof(ProduceView.BuyMaterials));
+        if (produceBuy != null)
+        {
+            harmony.Patch(produceBuy, prefix: new HarmonyMethod(typeof(WorkshopUiPatch), nameof(ProduceViewBuyPrefix)));
+        }
+
+        MethodInfo ragfairSetSearch = AccessTools.Method(
+            typeof(RagFair),
+            nameof(RagFair.SetSearch),
+            new[] { typeof(RagfairSearch), typeof(bool) });
+        if (ragfairSetSearch != null)
+        {
+            harmony.Patch(ragfairSetSearch, prefix: new HarmonyMethod(typeof(WorkshopUiPatch), nameof(RagfairSetSearchPrefix)));
+        }
+
         HideoutQoLPlugin.Log?.LogInfo("HideoutQoL: patched HideoutScreenOverlay for HideoutWorkshopScreen");
+    }
+
+    private static void ProduceViewBuyPrefix()
+    {
+        _pendingHideoutRagfairUntil = Time.unscaledTime + 5f;
+    }
+
+    private static bool RagfairSetSearchPrefix(RagFair __instance, RagfairSearch search, bool sendBackendData)
+    {
+        if (__instance == null
+            || search == null
+            || search.Type != EFilterType.BuildItems
+            || HideoutQoLPlugin.WorkshopRagfairIncludeAllOwners == null
+            || !HideoutQoLPlugin.WorkshopRagfairIncludeAllOwners.Value)
+        {
+            return true;
+        }
+
+        bool isFromHideout = ReferenceEquals(search, _pendingHideoutRagfairSearch)
+            || (_pendingHideoutRagfairUntil > 0f && Time.unscaledTime <= _pendingHideoutRagfairUntil);
+        if (!isFromHideout)
+        {
+            return true;
+        }
+
+        _pendingHideoutRagfairSearch = null;
+        _pendingHideoutRagfairUntil = -1f;
+
+        __instance.HandleDefaultFilter(EViewListType.WeaponBuild);
+        __instance.SetSearches(
+            EViewListType.WeaponBuild,
+            new[]
+            {
+                search,
+                new RagfairSearch(EFilterType.OfferOwnerType, (int)EOfferOwnerType.AnyOwnerType, add: false),
+            },
+            sendBackendData,
+            out _);
+        return false;
     }
 
     internal static void RequestVanillaAreaDrawer(HideoutScreenOverlay overlay, AreaData area)

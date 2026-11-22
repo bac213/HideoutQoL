@@ -414,13 +414,13 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         {
             case WorkshopRecipeState.Ready:
                 stripeColor = EftUiTemplateCache.ColorAccentReady;
-                statusLine = "✔ 制造完成 · 可立即领取";
+                statusLine = "制造完成 · 可立即领取";
                 _progressFill.gameObject.SetActive(false);
                 break;
 
             case WorkshopRecipeState.Producing:
                 stripeColor = EftUiTemplateCache.ColorAccentProducing;
-                statusLine = $"⚙ 制造中 {pct}% · 剩余 {FormatCompactDuration(remSec)}";
+                statusLine = $"制造中 {pct}% · 剩余 {FormatCompactDuration(remSec)}";
                 _progressFill.gameObject.SetActive(true);
                 float fullW = Math.Max(0f, ((RectTransform)transform).rect.width - 6f);
                 _progressFill.rectTransform.sizeDelta = new Vector2(fullW * Mathf.Clamp01(_boundEntry.Progress), 4f);
@@ -428,13 +428,13 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
 
             case WorkshopRecipeState.Error:
                 stripeColor = EftUiTemplateCache.ColorAccentMissing;
-                statusLine = "⚠ 生产中断 · 请检查电力";
+                statusLine = "生产中断 · 请检查电力";
                 _progressFill.gameObject.SetActive(false);
                 break;
 
             case WorkshopRecipeState.Locked:
                 stripeColor = EftUiTemplateCache.ColorAccentLocked;
-                statusLine = $"🔒 需设施等级 {_boundEntry.RequiredAreaLevel} 或前置任务";
+                statusLine = $"未解锁 · 需设施等级 {_boundEntry.RequiredAreaLevel} 或前置任务";
                 _progressFill.gameObject.SetActive(false);
                 break;
 
@@ -450,7 +450,7 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
                 }
                 else
                 {
-                    statusLine = $"✔ 材料齐备 ({_boundEntry.TotalItemRequirements}/{_boundEntry.TotalItemRequirements})";
+                    statusLine = $"材料齐备 ({_boundEntry.TotalItemRequirements}/{_boundEntry.TotalItemRequirements})";
                 }
                 _progressFill.gameObject.SetActive(false);
                 break;
