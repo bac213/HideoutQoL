@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Comfort.Common;
 using EFT;
 using EFT.Hideout;
@@ -20,13 +21,19 @@ namespace HideoutQoL.Client.UI;
 internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler
 {
     private const float IconBoxSize = 62f;
+    private const float StripeWidth = 3f;
+    private const float ProgressHeight = 3f;
+    private const float LockedIconAlpha = 0.45f;
+    private static readonly Color SelectedMetaColor = new Color32(40, 40, 40, 255);
 
     private EftUiTemplateCache _tpl;
+    private WorkshopGridView _owner;
+    private UiFader _iconFader;
+    private bool _iconPending;
     private Image _bgImage;
-    private Image _borderTop;
-    private Image _borderBottom;
-    private Image _borderLeft;
-    private Image _borderRight;
+    private Image _readyFrame;
+    private CanvasGroup _iconGroup;
+    private Image _clockIcon;
     private Image _statusStripe;
     private Image _progressFill;
 
@@ -77,7 +84,7 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
 
     internal WorkshopCatalogModel.RecipeEntry BoundEntry => _boundEntry;
 
-    internal static WorkshopRecipeTile Create(Transform parent, EftUiTemplateCache tpl, float height)
+    internal static WorkshopRecipeTile Create(Transform parent, EftUiTemplateCache tpl, float height, WorkshopGridView owner)
     {
         var go = new GameObject("RecipeTile", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
         go.transform.SetParent(parent, worldPositionStays: false);
@@ -88,6 +95,7 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         le.flexibleWidth = 1f;
 
         var tile = go.AddComponent<WorkshopRecipeTile>();
+        tile._owner = owner;
         tile.BuildUi(tpl);
         return tile;
     }
@@ -99,35 +107,38 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         _bgImage.color = EftUiTemplateCache.ColorRowIdle;
         _bgImage.raycastTarget = true;
 
-        // Subtle 1px outer border frame (EFT card aesthetic)
-        _borderTop = CreateBorderEdge("BorderTop", new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, 1f));
-        _borderBottom = CreateBorderEdge("BorderBottom", new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 1f));
-        _borderLeft = CreateBorderEdge("BorderLeft", new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), new Vector2(1f, 0f));
-        _borderRight = CreateBorderEdge("BorderRight", new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f), new Vector2(1f, 0f));
+        // Vanilla list rows are borderless; only a finished craft gets a border_generic frame in the ready color.
+        _readyFrame = _tpl.CreateFrame(transform, "ReadyFrame", _tpl.BorderGenericSprite, EftUiTemplateCache.ColorAccentReady);
+        if (_readyFrame != null)
+        {
+            _readyFrame.gameObject.SetActive(false);
+        }
 
-        // Left 4px colored craftability / active stripe
+        // Left colored craftability / active stripe
         _statusStripe = _tpl.CreatePanel(transform, "StatusStripe", EftUiTemplateCache.ColorAccentLocked);
         RectTransform stripeRt = _statusStripe.rectTransform;
         stripeRt.anchorMin = new Vector2(0f, 0f);
         stripeRt.anchorMax = new Vector2(0f, 1f);
         stripeRt.pivot = new Vector2(0f, 0.5f);
-        stripeRt.anchoredPosition = new Vector2(1f, 0f);
-        stripeRt.sizeDelta = new Vector2(4f, -2f);
+        stripeRt.anchoredPosition = Vector2.zero;
+        stripeRt.sizeDelta = new Vector2(StripeWidth, 0f);
 
-        // Live progress fill at bottom of card (shown when Producing)
-        _progressFill = _tpl.CreatePanel(transform, "ProgressFill", new Color(0.24f, 0.52f, 0.25f, 0.35f));
+        // Live progress fill along the bottom edge (shown when Producing)
+        Color progressColor = EftUiTemplateCache.ColorAccentProducing;
+        progressColor.a = 0.85f;
+        _progressFill = _tpl.CreatePanel(transform, "ProgressFill", progressColor);
         RectTransform progRt = _progressFill.rectTransform;
         progRt.anchorMin = new Vector2(0f, 0f);
         progRt.anchorMax = new Vector2(0f, 0f);
         progRt.pivot = new Vector2(0f, 0f);
-        progRt.anchoredPosition = new Vector2(5f, 1f);
-        progRt.sizeDelta = new Vector2(0f, 4f);
+        progRt.anchoredPosition = new Vector2(StripeWidth, 0f);
+        progRt.sizeDelta = new Vector2(0f, ProgressHeight);
         _progressFill.gameObject.SetActive(false);
 
         // Horizontal content body inside tile
         var bodyGo = new GameObject("Body", typeof(RectTransform), typeof(HorizontalLayoutGroup));
         bodyGo.transform.SetParent(transform, worldPositionStays: false);
-        EftUiTemplateCache.Stretch((RectTransform)bodyGo.transform, left: 10f, right: 8f, top: 6f, bottom: 6f);
+        EftUiTemplateCache.Stretch((RectTransform)bodyGo.transform, left: StripeWidth + 5f, right: 8f, top: 6f, bottom: 6f);
         HorizontalLayoutGroup bodyHlg = bodyGo.GetComponent<HorizontalLayoutGroup>();
         bodyHlg.padding = new RectOffset(0, 0, 0, 0);
         bodyHlg.spacing = 10f;
@@ -137,9 +148,10 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         bodyHlg.childForceExpandHeight = false;
         bodyHlg.childAlignment = TextAnchor.MiddleLeft;
 
-        // Icon slot container (64x64)
-        var iconSlotGo = new GameObject("IconSlot", typeof(RectTransform), typeof(LayoutElement));
+        // Icon slot container (62x62, as in the handbook EntityElement); the group dims locked recipes
+        var iconSlotGo = new GameObject("IconSlot", typeof(RectTransform), typeof(LayoutElement), typeof(CanvasGroup));
         iconSlotGo.transform.SetParent(bodyGo.transform, worldPositionStays: false);
+        _iconGroup = iconSlotGo.GetComponent<CanvasGroup>();
         var iconLe = iconSlotGo.GetComponent<LayoutElement>();
         iconLe.minWidth = IconBoxSize;
         iconLe.preferredWidth = IconBoxSize;
@@ -157,6 +169,7 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
             fRt.pivot = new Vector2(0.5f, 0.5f);
             fRt.anchoredPosition = Vector2.zero;
             fRt.sizeDelta = new Vector2(IconBoxSize, IconBoxSize);
+            _iconFader = UiFader.For(_itemFactory.gameObject);
         }
 
         // Center text stack (title + metadata row + status row)
@@ -168,53 +181,50 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         textLe.flexibleHeight = 1f;
 
         VerticalLayoutGroup vlg = textColGo.GetComponent<VerticalLayoutGroup>();
-        vlg.padding = new RectOffset(0, 0, 2, 2);
-        vlg.spacing = 3f;
+        vlg.padding = new RectOffset(0, 0, 0, 0);
+        vlg.spacing = 1f;
         vlg.childControlWidth = true;
         vlg.childControlHeight = true;
         vlg.childForceExpandWidth = true;
         vlg.childForceExpandHeight = false;
         vlg.childAlignment = TextAnchor.MiddleLeft;
 
-        _titleText = _tpl.CreateText(textColGo.transform, "Title", "", 15f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
+        // Type scale of the handbook EntityElement: bold 18 name, 14 secondary lines
+        _titleText = _tpl.CreateText(textColGo.transform, "Title", "", EftUiTemplateCache.FontName, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
         var titleLe = _titleText.gameObject.AddComponent<LayoutElement>();
-        titleLe.preferredHeight = 22f;
+        titleLe.preferredHeight = 24f;
 
-        // Meta row: [Station/Level] + [Bolt if fuel required] + [Duration]
+        // Meta row: [Station/Level] + [Bolt if fuel required] + [Clock] + [Duration]
         var metaGo = new GameObject("MetaRow", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
         metaGo.transform.SetParent(textColGo.transform, worldPositionStays: false);
-        metaGo.GetComponent<LayoutElement>().preferredHeight = 18f;
+        metaGo.GetComponent<LayoutElement>().preferredHeight = 20f;
         HorizontalLayoutGroup metaHlg = metaGo.GetComponent<HorizontalLayoutGroup>();
-        metaHlg.spacing = 8f;
+        metaHlg.spacing = 5f;
         metaHlg.childControlWidth = true;
         metaHlg.childControlHeight = true;
         metaHlg.childForceExpandWidth = false;
         metaHlg.childForceExpandHeight = false;
         metaHlg.childAlignment = TextAnchor.MiddleLeft;
 
-        _stationText = _tpl.CreateText(metaGo.transform, "Station", "", 12f, EftUiTemplateCache.ColorTextSecondary);
+        _stationText = _tpl.CreateText(metaGo.transform, "Station", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary);
         _stationText.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
 
         if (_tpl.BoltSprite != null)
         {
-            var boltGo = new GameObject("FuelIcon", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            boltGo.transform.SetParent(metaGo.transform, worldPositionStays: false);
-            var boltLe = boltGo.GetComponent<LayoutElement>();
-            boltLe.preferredWidth = 13f;
-            boltLe.preferredHeight = 13f;
-            _boltIcon = boltGo.GetComponent<Image>();
-            _boltIcon.sprite = _tpl.BoltSprite;
-            _boltIcon.preserveAspect = true;
-            _boltIcon.raycastTarget = false;
+            _boltIcon = CreateMetaIcon(metaGo.transform, "FuelIcon", _tpl.BoltSprite);
+        }
+        if (_tpl.ClockSprite != null)
+        {
+            _clockIcon = CreateMetaIcon(metaGo.transform, "ClockIcon", _tpl.ClockSprite);
         }
 
-        _timeText = _tpl.CreateText(metaGo.transform, "Duration", "", 12f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
+        _timeText = _tpl.CreateText(metaGo.transform, "Duration", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
         var timeLe = _timeText.gameObject.AddComponent<LayoutElement>();
-        timeLe.minWidth = 64f;
+        timeLe.minWidth = _clockIcon != null ? 0f : 72f;
 
         // Status / readiness line
-        _statusBadgeText = _tpl.CreateText(textColGo.transform, "StatusBadge", "", 12.5f, EftUiTemplateCache.ColorAccentCraftable);
-        _statusBadgeText.gameObject.AddComponent<LayoutElement>().preferredHeight = 18f;
+        _statusBadgeText = _tpl.CreateText(textColGo.transform, "StatusBadge", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorAccentCraftable);
+        _statusBadgeText.gameObject.AddComponent<LayoutElement>().preferredHeight = 20f;
 
         // Right slim favorite column
         var favColGo = new GameObject("FavCol", typeof(RectTransform), typeof(LayoutElement));
@@ -247,15 +257,19 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         _favIcon.raycastTarget = false;
     }
 
-    private Image CreateBorderEdge(string name, Vector2 aMin, Vector2 aMax, Vector2 pivot, Vector2 sizeDelta)
+    private static Image CreateMetaIcon(Transform parent, string name, Sprite sprite)
     {
-        Image img = _tpl.CreatePanel(transform, name, EftUiTemplateCache.ColorCardBorder);
-        RectTransform rt = img.rectTransform;
-        rt.anchorMin = aMin;
-        rt.anchorMax = aMax;
-        rt.pivot = pivot;
-        rt.anchoredPosition = Vector2.zero;
-        rt.sizeDelta = sizeDelta;
+        var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+        go.transform.SetParent(parent, worldPositionStays: false);
+        var le = go.GetComponent<LayoutElement>();
+        le.minWidth = 16f;
+        le.preferredWidth = 16f;
+        le.minHeight = 16f;
+        le.preferredHeight = 16f;
+        Image img = go.GetComponent<Image>();
+        img.sprite = sprite;
+        img.preserveAspect = true;
+        img.raycastTarget = false;
         return img;
     }
 
@@ -289,18 +303,22 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         if (_itemFactory != null && identityChanged)
         {
             _itemFactory.Close();
-            Item schemeItem = EftUiTemplateCache.CreateHideoutDisplayItem(
-                entry.EndProductId,
-                entry.SchemeId,
-                EOwnerType.HideoutProduction,
-                spawnedInSession: false,
-                isEncoded: entry.Scheme.isEncoded);
 
-            if (schemeItem != null)
+            // Creating the HideoutItemView (and the display item behind it) is the expensive part of a bind.
+            // Hand it to the grid's per-frame budget so a scrollbar fling or a filter change never builds a
+            // whole screen of icons in one frame; the text below is cheap and binds right away.
+            if (_owner != null)
             {
-                _itemFactory.Show(schemeItem, _inventoryController, _itemUiContext);
-                _itemFactory.ShowInfo(entry.Scheme.isCodeProduction, showFulfilledStatus: false);
-                EftUiTemplateCache.NormalizeItemFactoryRect(_itemFactory, IconBoxSize, showInfo: entry.Scheme.isCodeProduction);
+                _iconFader?.Snap(0f);
+                if (!_iconPending)
+                {
+                    _iconPending = true;
+                    _owner.EnqueueIcon(this);
+                }
+            }
+            else
+            {
+                ShowIcon(entry);
             }
 
             _boundSchemeId = entry.SchemeId;
@@ -355,6 +373,41 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         }
 
         RefreshDynamicVisuals();
+    }
+
+    /// <summary>Called by the grid within its frame budget. Returns false if the request went stale.</summary>
+    internal bool TryShowPendingIcon()
+    {
+        if (!_iconPending)
+        {
+            return false;
+        }
+        _iconPending = false;
+        if (_boundEntry == null || _itemFactory == null)
+        {
+            return false;
+        }
+
+        ShowIcon(_boundEntry);
+        _iconFader?.Play(0f, 1f, WorkshopFx.ContentFade);
+        return true;
+    }
+
+    private void ShowIcon(WorkshopCatalogModel.RecipeEntry entry)
+    {
+        Item schemeItem = EftUiTemplateCache.CreateHideoutDisplayItem(
+            entry.EndProductId,
+            entry.SchemeId,
+            EOwnerType.HideoutProduction,
+            spawnedInSession: false,
+            isEncoded: entry.Scheme.isEncoded);
+
+        if (schemeItem != null)
+        {
+            _itemFactory.Show(schemeItem, _inventoryController, _itemUiContext);
+            _itemFactory.ShowInfo(entry.Scheme.isCodeProduction, showFulfilledStatus: false);
+            EftUiTemplateCache.NormalizeItemFactoryRect(_itemFactory, IconBoxSize, showInfo: entry.Scheme.isCodeProduction);
+        }
     }
 
     internal void SetSelected(bool selected)
@@ -422,8 +475,8 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
                 stripeColor = EftUiTemplateCache.ColorAccentProducing;
                 statusLine = $"制造中 {pct}% · 剩余 {FormatCompactDuration(remSec)}";
                 _progressFill.gameObject.SetActive(true);
-                float fullW = Math.Max(0f, ((RectTransform)transform).rect.width - 6f);
-                _progressFill.rectTransform.sizeDelta = new Vector2(fullW * Mathf.Clamp01(_boundEntry.Progress), 4f);
+                float fullW = Math.Max(0f, ((RectTransform)transform).rect.width - StripeWidth);
+                _progressFill.rectTransform.sizeDelta = new Vector2(fullW * Mathf.Clamp01(_boundEntry.Progress), ProgressHeight);
                 break;
 
             case WorkshopRecipeState.Error:
@@ -484,7 +537,7 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         _favIcon.sprite = spr;
         _favIcon.color = fav
             ? EftUiTemplateCache.ColorAccentReady
-            : new Color(0.75f, 0.75f, 0.72f, _hovered ? 0.85f : 0.35f);
+            : new Color(0.75f, 0.75f, 0.72f, _hovered ? 0.9f : 0.5f);
     }
 
     private void ApplyColors()
@@ -507,17 +560,36 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
             UpdateFavoriteVisual();
         }
 
+        // Ease only a pure hover change; rebinding, selection and state changes must land immediately.
+        bool hoverOnly = _hasColorSnapshot
+            && _colorSelected == _selected
+            && _colorState == _boundEntry.State
+            && _colorHovered != _hovered;
+
         _hasColorSnapshot = true;
         _colorSelected = _selected;
         _colorHovered = _hovered;
         _colorState = _boundEntry.State;
 
+        if (_readyFrame != null)
+        {
+            _readyFrame.gameObject.SetActive(_boundEntry.State == WorkshopRecipeState.Ready);
+        }
+        if (_iconGroup != null)
+        {
+            _iconGroup.alpha = _boundEntry.State == WorkshopRecipeState.Locked ? LockedIconAlpha : 1f;
+        }
+        if (_clockIcon != null)
+        {
+            _clockIcon.color = _selected ? SelectedMetaColor : (Color)EftUiTemplateCache.ColorTextSecondary;
+        }
+
         if (_selected)
         {
-            _bgImage.color = EftUiTemplateCache.ColorRowSelected;
+            WorkshopFx.SetColor(_bgImage, EftUiTemplateCache.ColorRowSelected, animate: false);
             _titleText.color = EftUiTemplateCache.ColorTextDark;
-            _stationText.color = new Color32(45, 45, 45, 255);
-            _timeText.color = new Color32(35, 35, 35, 255);
+            _stationText.color = SelectedMetaColor;
+            _timeText.color = SelectedMetaColor;
             _statusBadgeText.color = _boundEntry.State switch
             {
                 WorkshopRecipeState.Ready => new Color32(120, 72, 0, 255),
@@ -528,7 +600,10 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
         }
         else
         {
-            _bgImage.color = _hovered ? EftUiTemplateCache.ColorRowHover : EftUiTemplateCache.ColorRowIdle;
+            WorkshopFx.SetColor(
+                _bgImage,
+                _hovered ? EftUiTemplateCache.ColorRowHover : EftUiTemplateCache.ColorRowIdle,
+                animate: hoverOnly);
             _titleText.color = _boundEntry.State == WorkshopRecipeState.Locked
                 ? EftUiTemplateCache.ColorTextMuted
                 : EftUiTemplateCache.ColorTextPrimary;
@@ -547,6 +622,7 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
 
     internal void Unbind()
     {
+        _iconPending = false;
         if (_itemFactory != null)
         {
             _itemFactory.Close();
@@ -622,9 +698,12 @@ internal sealed class WorkshopRecipeTile : MonoBehaviour, IPointerEnterHandler, 
 /// </summary>
 internal sealed class WorkshopGridView : MonoBehaviour
 {
-    private const float RowHeight = 82f;
-    private const float RowSpacing = 6f;
+    private const float RowHeight = 80f;
+    private const float RowSpacing = 4f;
     private const int BufferRows = 1;
+
+    // Icon creation budget per frame. At least one icon is always built so the queue drains.
+    private const double IconBudgetMs = 3.0;
 
     private sealed class GridRow
     {
@@ -635,6 +714,7 @@ internal sealed class WorkshopGridView : MonoBehaviour
     }
 
     private EftUiTemplateCache _tpl;
+    private UiFader _contentFader;
     private ScrollRect _scrollRect;
     private RectTransform _viewport;
     private RectTransform _content;
@@ -646,6 +726,8 @@ internal sealed class WorkshopGridView : MonoBehaviour
     private readonly List<GridRow> _activeRows = new(12);
     private readonly Stack<GridRow> _rowPool = new(12);
     private readonly List<WorkshopCatalogModel.RecipeEntry> _items = new(256);
+    private readonly List<WorkshopRecipeTile> _pendingIcons = new(48);
+    private readonly Stopwatch _iconBudget = new();
 
     private InventoryController _inventoryController;
     private ItemUiContext _itemUiContext;
@@ -681,7 +763,7 @@ internal sealed class WorkshopGridView : MonoBehaviour
         if (vlg != null)
         {
             vlg.spacing = RowSpacing;
-            vlg.padding = new RectOffset(6, 6, 6, 10);
+            vlg.padding = new RectOffset(2, 2, 2, 10);
         }
 
         _topSpacer = CreateSpacer("TopSpacer", _content);
@@ -725,6 +807,11 @@ internal sealed class WorkshopGridView : MonoBehaviour
         if (resetScroll && _content != null)
         {
             _content.anchoredPosition = Vector2.zero;
+
+            // A different list is about to be bound (station / category / filter / search): fade it in
+            // instead of swapping every card in one frame. State refreshes keep resetScroll false.
+            _contentFader ??= UiFader.For(_content.gameObject);
+            _contentFader.Play(0.15f, 1f, WorkshopFx.ContentFade);
         }
 
         _firstRow = -1;
@@ -769,6 +856,7 @@ internal sealed class WorkshopGridView : MonoBehaviour
     internal void Clear()
     {
         ReturnAllRowsToPool();
+        _pendingIcons.Clear();
         _items.Clear();
         _firstRow = -1;
         _lastRow = -1;
@@ -776,19 +864,51 @@ internal sealed class WorkshopGridView : MonoBehaviour
         if (_bottomSpacer != null) _bottomSpacer.preferredHeight = 0f;
     }
 
+    internal void EnqueueIcon(WorkshopRecipeTile tile)
+    {
+        _pendingIcons.Add(tile);
+    }
+
     private void LateUpdate()
     {
-        if (_viewport == null || _items.Count == 0)
+        if (_viewport != null && _items.Count > 0)
+        {
+            float vpH = _viewport.rect.height;
+            float scrollY = _content != null ? _content.anchoredPosition.y : 0f;
+            if (Mathf.Abs(vpH - _lastViewportH) > 2f || Mathf.Abs(scrollY - _lastScrollY) > 1f)
+            {
+                UpdateVisibleWindow(forceRebind: false);
+            }
+        }
+
+        // Runs after the window update so rows bound this frame start loading this frame.
+        DrainIconQueue();
+    }
+
+    private void DrainIconQueue()
+    {
+        if (_pendingIcons.Count == 0)
         {
             return;
         }
 
-        float vpH = _viewport.rect.height;
-        float scrollY = _content != null ? _content.anchoredPosition.y : 0f;
-        if (Mathf.Abs(vpH - _lastViewportH) > 2f || Mathf.Abs(scrollY - _lastScrollY) > 1f)
+        _iconBudget.Restart();
+        int consumed = 0;
+        bool builtAny = false;
+        while (consumed < _pendingIcons.Count)
         {
-            UpdateVisibleWindow(forceRebind: false);
+            if (builtAny && _iconBudget.Elapsed.TotalMilliseconds >= IconBudgetMs)
+            {
+                break;
+            }
+
+            // Tiles scrolled away or rebound before their turn report false and cost nothing.
+            if (_pendingIcons[consumed++].TryShowPendingIcon())
+            {
+                builtAny = true;
+            }
         }
+        _pendingIcons.RemoveRange(0, consumed);
     }
 
     private void UpdateVisibleWindow(bool forceRebind)
@@ -998,7 +1118,7 @@ internal sealed class WorkshopGridView : MonoBehaviour
 
         var hlg = rowGo.GetComponent<HorizontalLayoutGroup>();
         hlg.padding = new RectOffset(0, 0, 0, 0);
-        hlg.spacing = 6f;
+        hlg.spacing = RowSpacing;
         hlg.childControlWidth = true;
         hlg.childControlHeight = true;
         hlg.childForceExpandWidth = true;
@@ -1007,7 +1127,7 @@ internal sealed class WorkshopGridView : MonoBehaviour
         var row = new GridRow { Root = rowGo };
         for (int c = 0; c < _columns; c++)
         {
-            WorkshopRecipeTile tile = WorkshopRecipeTile.Create(rowGo.transform, _tpl, RowHeight);
+            WorkshopRecipeTile tile = WorkshopRecipeTile.Create(rowGo.transform, _tpl, RowHeight, this);
             row.Tiles.Add(tile);
 
             var dummyGo = new GameObject("SpacerSlot", typeof(RectTransform), typeof(LayoutElement));

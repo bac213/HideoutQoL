@@ -23,23 +23,40 @@ namespace HideoutQoL.Client.UI;
 /// </summary>
 internal sealed class EftUiTemplateCache
 {
-    // Canonical Tarkov dark military UI palette (verified against EntityListElement & HandbookScreen)
-    internal static readonly Color32 ColorTextPrimary = new(197, 195, 178, 255);    // #C5C3B2 bone/parchment
-    internal static readonly Color32 ColorTextSecondary = new(166, 176, 181, 255);  // #A6B0B5 muted slate
+    // Values below are read from the vanilla prefabs (HandbookScreen, EntityElement, AreaScreenSubstrate,
+    // ProduceView) so the Workshop reads as a stock EFT screen. Keep them in sync with the game, not with taste.
+    internal static readonly Color32 ColorTextPrimary = new(197, 195, 178, 255);    // #C5C3B2 names / captions
+    internal static readonly Color32 ColorTextSecondary = new(166, 176, 181, 255);  // #A6B0B5 categories / counts
+    internal static readonly Color32 ColorTextBright = new(202, 214, 220, 255);     // #CAD6DC status / progress text
+    internal static readonly Color32 ColorTextTitle = new(237, 235, 214, 255);      // #EDEBD6 area name
+    internal static readonly Color32 ColorTextLabel = new(148, 146, 134, 255);      // #949286 column labels
     internal static readonly Color32 ColorTextDark = new(12, 13, 14, 255);
     internal static readonly Color32 ColorTextMuted = new(120, 125, 128, 255);
 
-    internal static readonly Color ColorWindowScrim = new(0.024f, 0.027f, 0.031f, 0.985f);
-    internal static readonly Color ColorHeaderBg = new(0.036f, 0.040f, 0.045f, 0.99f);
-    internal static readonly Color ColorPanelBg = new(0.046f, 0.050f, 0.056f, 0.96f);
-    internal static readonly Color ColorSubBarBg = new(0.075f, 0.080f, 0.086f, 0.92f);
+    // Base under main_part_gradient. Kept near-opaque: at 0.88 the hideout's bottom area bar bled through
+    // the action dock and the last grid row.
+    internal static readonly Color ColorWindowScrim = new(0.024f, 0.027f, 0.031f, 0.97f);
+    internal static readonly Color ColorCaptionBand = new(1f, 1f, 1f, 0.12f);       // line_fader_white tint
+    internal static readonly Color ColorCaptionPanel = new(1f, 1f, 1f, 0.07f);      // item name strip
+    internal static readonly Color ColorColumnTint = new(1f, 1f, 1f, 0.06f);        // handbook middle column
+    internal static readonly Color ColorInsetBg = new(0f, 0f, 0f, 0.33f);           // status pills
+    internal static readonly Color ColorTrackBg = new(0f, 0f, 0f, 0.42f);           // progress track
+    internal static readonly Color ColorPreviewBg = new(0f, 0f, 0f, 0.85f);         // behind info_window_back
+    internal static readonly Color ColorWarnBg = new(0.55f, 0.16f, 0.12f, 0.50f);   // power / fuel warnings
+    internal static readonly Color32 ColorWarnText = new(238, 178, 118, 255);
 
     internal static readonly Color ColorRowIdle = new(0.275f, 0.275f, 0.275f, 0.314f);
     internal static readonly Color ColorRowHover = new(0.275f, 0.275f, 0.275f, 0.85f);
     internal static readonly Color ColorRowSelected = new Color32(197, 195, 178, 255);
 
-    internal static readonly Color ColorHairline = new(0.42f, 0.42f, 0.40f, 0.48f);
-    internal static readonly Color ColorCardBorder = new(0.32f, 0.33f, 0.31f, 0.65f);
+    internal static readonly Color ColorHairline = new(1f, 1f, 1f, 0.12f);
+    internal static readonly Color ColorCardBorder = new Color32(73, 81, 84, 255);  // #495154 item border
+
+    // Type scale used by vanilla list screens (1920x1080 reference).
+    internal const float FontTitle = 26f;
+    internal const float FontName = 18f;
+    internal const float FontBody = 16f;
+    internal const float FontSmall = 14f;
 
     internal static readonly Color32 ColorAccentReady = new(218, 178, 82, 255);
     internal static readonly Color32 ColorAccentProducing = new(115, 194, 96, 255);
@@ -95,6 +112,14 @@ internal sealed class EftUiTemplateCache
     internal Sprite BoltSprite { get; private set; }
     internal Sprite ClockSprite { get; private set; }
     internal Sprite WhiteBoxSprite { get; private set; }
+
+    // Panel chrome borrowed from vanilla screens; every one may be null, callers fall back to flat colors.
+    internal Sprite MainGradientSprite { get; private set; }
+    internal Sprite PreviewBackSprite { get; private set; }
+    internal Sprite PreviewCornerSprite { get; private set; }
+    internal Sprite BorderGenericSprite { get; private set; }
+    internal Sprite BorderShadowSprite { get; private set; }
+    internal Sprite LineFaderSprite { get; private set; }
 
     private readonly struct DisplayItemKey : IEquatable<DisplayItemKey>
     {
@@ -205,6 +230,7 @@ internal sealed class EftUiTemplateCache
         Transform panelsBg = handbook.transform.Find("Panels/Background");
         if (panelsBg != null)
         {
+            MainGradientSprite ??= panelsBg.GetComponent<Image>()?.sprite;
             TopShadowTemplate ??= panelsBg.Find("Top Shadow")?.gameObject;
             BottomShadowTemplate ??= panelsBg.Find("Bottom Shadow")?.gameObject;
             LineTemplate ??= panelsBg.Find("Top Shadow/Line")?.GetComponent<Image>();
@@ -246,6 +272,13 @@ internal sealed class EftUiTemplateCache
                     {
                         CameraImageTemplate = SpecificationPanelTemplate._cameraImage;
                     }
+
+                    Transform previewBox = CameraImageTemplate != null ? CameraImageTemplate.transform.parent : null;
+                    if (previewBox != null)
+                    {
+                        PreviewBackSprite ??= previewBox.GetComponent<Image>()?.sprite;
+                        PreviewCornerSprite ??= previewBox.Find("bottom_left")?.GetComponent<Image>()?.sprite;
+                    }
                 }
             }
         }
@@ -273,6 +306,8 @@ internal sealed class EftUiTemplateCache
         }
 
         ActionButtonTemplate ??= substrate._actionButton;
+        BorderShadowSprite ??= substrate.transform.Find("Border")?.GetComponent<Image>()?.sprite;
+        LineFaderSprite ??= substrate.transform.Find("CaptionPanel")?.GetComponent<Image>()?.sprite;
         ScrollbarTemplate ??= substrate.transform.Find("Content/CurrentLevel/CurrentContainer/Scrollbar")?.gameObject;
 
         IAreaRelatedPanel relatedPanel = substrate.ChooseView(new RelatedProduction());
@@ -306,6 +341,7 @@ internal sealed class EftUiTemplateCache
                 {
                     StarSelectedSprite ??= ComplementSelectedIconField?.GetValue(pv._favoriteButton) as Sprite;
                     StarDefaultSprite ??= ComplementDefaultIconField?.GetValue(pv._favoriteButton) as Sprite;
+                    BorderGenericSprite ??= pv._favoriteButton.transform.Find("Border")?.GetComponent<Image>()?.sprite;
                 }
 
                 if (pv._buyButton != null)
@@ -388,6 +424,37 @@ internal sealed class EftUiTemplateCache
         img.color = color;
         img.raycastTarget = raycastTarget;
         return img;
+    }
+
+    /// <summary>
+    /// Hollow 9-sliced frame stretched over <paramref name="parent"/>. Returns null when the vanilla sprite
+    /// could not be borrowed, so callers can simply skip the frame.
+    /// </summary>
+    internal Image CreateFrame(Transform parent, string name, Sprite sprite, Color color, float outset = 0f)
+    {
+        if (sprite == null)
+        {
+            return null;
+        }
+
+        Image img = CreatePanel(parent, name, color);
+        img.sprite = sprite;
+        img.type = Image.Type.Sliced;
+        img.fillCenter = false;
+        if (parent.GetComponent<LayoutGroup>() != null)
+        {
+            img.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+        }
+        Stretch(img.rectTransform, -outset, -outset, -outset, -outset);
+        return img;
+    }
+
+    /// <summary>Small grey caption above a column, as in the handbook ("Categories", "Description").</summary>
+    internal TextMeshProUGUI CreateColumnLabel(Transform parent, string name, string text)
+    {
+        TextMeshProUGUI label = CreateText(parent, name, text, FontBody, ColorTextLabel);
+        SetFixedLayout(label.gameObject, height: 24f, flexW: -1f, flexH: 0f);
+        return label;
     }
 
     internal void AddShadowPair(Transform parent)
@@ -500,7 +567,21 @@ internal sealed class EftUiTemplateCache
             btn.OnClick.AddListener(onClick);
         }
 
+        AddButtonPlate(btn);
         return btn;
+    }
+
+    /// <summary>
+    /// The vanilla text button is label-only until hovered, which reads fine on a sparse menu but gets lost
+    /// in a dense panel. Put the vanilla status-pill fill (black 33%) behind it; the stock hover fill and
+    /// label animation still play on top.
+    /// </summary>
+    private void AddButtonPlate(DefaultUIButton btn)
+    {
+        Image plate = CreatePanel(btn.transform, "Plate", ColorInsetBg);
+        plate.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+        plate.transform.SetAsFirstSibling();
+        Stretch(plate.rectTransform);
     }
 
     internal DefaultUIButton CloneBackButton(Transform parent, string name, UnityAction onClick)
@@ -519,6 +600,7 @@ internal sealed class EftUiTemplateCache
         {
             btn.OnClick.AddListener(onClick);
         }
+        AddButtonPlate(btn);
         return btn;
     }
 
@@ -537,6 +619,13 @@ internal sealed class EftUiTemplateCache
 
         if (field.placeholder is TextMeshProUGUI ph)
         {
+            // The vanilla placeholder carries a LocalizedText that rewrites the label on enable. Disable it
+            // but never destroy it: UIElement.OnDestroy hides the GameObject it sits on.
+            LocalizedText localized = ph.GetComponent<LocalizedText>();
+            if (localized != null)
+            {
+                localized.enabled = false;
+            }
             ph.text = placeholderText;
         }
 
@@ -587,8 +676,8 @@ internal sealed class EftUiTemplateCache
         vlg.childControlHeight = true;
         vlg.childForceExpandWidth = true;
         vlg.childForceExpandHeight = false;
-        vlg.padding = new RectOffset(4, 4, 4, addBottomPadding ? 12 : 4);
-        vlg.spacing = 4f;
+        vlg.padding = new RectOffset(2, 2, 2, addBottomPadding ? 12 : 2);
+        vlg.spacing = 2f;
 
         ContentSizeFitter csf = contentGo.AddComponent<ContentSizeFitter>();
         csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
@@ -618,6 +707,7 @@ internal sealed class EftUiTemplateCache
             }
         }
 
+        SmoothWheelScroll.Attach(scroll);
         return (scroll, viewportRt, contentRt);
     }
 

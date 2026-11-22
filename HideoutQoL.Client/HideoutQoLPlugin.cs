@@ -12,7 +12,7 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.spt.hideoutqol.client";
     public const string PluginName = "HideoutQoL";
-    public const string PluginVersion = "0.1.0";
+    public const string PluginVersion = "0.2.0";
 
     internal static ManualLogSource Log { get; private set; }
     internal static HideoutQoLPlugin Instance { get; private set; }
@@ -50,6 +50,7 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
     internal static ConfigEntry<int> WorkshopGridColumns;
     internal static ConfigEntry<bool> WorkshopHideLockedByDefault;
     internal static ConfigEntry<bool> WorkshopRagfairIncludeAllOwners;
+    internal static ConfigEntry<bool> WorkshopAnimations;
 
     // 9. Diagnostics
     internal static ConfigEntry<bool> PerfLogging;
@@ -197,6 +198,11 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
             catWorkshop, "跳蚤购料包含玩家报价（不限商人）",
             "从藏身处点击【购齐缺料】或【跳蚤】跳转购买时，自动取消原版默认的【仅显示商人】过滤，直接显示含玩家在内的全部跳蚤市场报价。");
 
+        WorkshopAnimations = t.Bind(
+            "4. Workshop UI", "WorkshopAnimations", true,
+            catWorkshop, "界面淡入淡出动画",
+            "开启后工坊窗口开关、切换列表/配方、3D 预览加载、卡片图标出现与悬停时使用短暂淡入淡出过渡；关闭则全部立即切换（卡片图标仍分帧加载，不会卡住画面）。");
+
         t.Advanced = true;
         const string catDiag = "9. 调试";
         PerfLogging = t.Bind(
@@ -216,7 +222,8 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
         TryApply("HideoutUiOptimizationsPatch", () => HideoutUiOptimizationsPatch.Apply(_harmony));
         TryApply("HideoutBackdropPatch", () => HideoutBackdropPatch.Apply(_harmony));
         TryApply("WorkshopUiPatch", () => WorkshopUiPatch.Apply(_harmony));
-        TryApply("HideoutProfilerPatch", () => HideoutProfilerPatch.Apply(_harmony));
+        // Uses its own Harmony instance; patches are only installed while PerfLogging is on.
+        TryApply("HideoutProfilerPatch", HideoutProfilerPatch.Init);
     }
 
     private static void TryApply(string name, Action apply)
@@ -242,6 +249,7 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
 
     private void OnDestroy()
     {
+        HideoutProfilerPatch.Shutdown();
         _harmony?.UnpatchSelf();
     }
 }

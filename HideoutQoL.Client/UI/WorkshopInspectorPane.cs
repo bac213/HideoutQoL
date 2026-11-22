@@ -103,6 +103,24 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
     private DefaultUIButton _restartBtn;
     private DefaultUIButton _cancelBtn;
 
+    // The preview camera renders deferred into a 2x RenderTexture. Keep it on only while the image can change
+    // (model load, drag/zoom, texture streaming settle) and leave the last frame on the RawImage otherwise.
+    private const float PreviewSettleSeconds = 1.5f;
+    private const float PreviewInteractSeconds = 0.5f;
+    private float _previewRenderUntil = -1f;
+    private RenderTexture _lastPreviewTexture;
+    private Action _onPreviewModelLoaded;
+
+    // WeaponPreview.SetupItemPreview overwrites this unsubscribe action on every call; only Hide() invokes it.
+    private static readonly HarmonyLib.AccessTools.FieldRef<WeaponPreview, Action> ResolutionBindingRef =
+        CreateResolutionBindingRef();
+
+    private UiFader _bodyFader;
+    private UiFader _previewFader;
+    private bool _previewRevealPending;
+    private float _previewRevealDeadline;
+    private const float PreviewRevealTimeout = 1.0f;
+
     private WorkshopCatalogModel.RecipeEntry _entry;
     private string _boundPreviewSchemeId;
     private bool _lastShow3D;
@@ -144,13 +162,13 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
             _emptyStatePanel.transform,
             "EmptyHint",
             "请从左侧选择一个制作配方查看详情",
-            15f,
-            EftUiTemplateCache.ColorTextMuted,
+            EftUiTemplateCache.FontName,
+            EftUiTemplateCache.ColorTextLabel,
             TextAlignmentOptions.Center);
 
         _bodyPanel = new GameObject("InspectorBody", typeof(RectTransform), typeof(VerticalLayoutGroup));
         _bodyPanel.transform.SetParent(transform, worldPositionStays: false);
-        EftUiTemplateCache.Stretch((RectTransform)_bodyPanel.transform, 10f, 10f, 8f, 10f);
+        EftUiTemplateCache.Stretch((RectTransform)_bodyPanel.transform, 12f, 12f, 8f, 12f);
         var bodyVlg = _bodyPanel.GetComponent<VerticalLayoutGroup>();
         bodyVlg.spacing = 6f;
         bodyVlg.childControlWidth = true;
@@ -170,15 +188,16 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
         crumbHlg.childForceExpandHeight = false;
         crumbHlg.childAlignment = TextAnchor.MiddleLeft;
 
-        _stationCrumbText = _tpl.CreateText(crumbRow.transform, "StationCrumb", "", 13f, EftUiTemplateCache.ColorAccentReady);
+        // Grey column caption, like the handbook's "Description" label
+        _stationCrumbText = _tpl.CreateText(crumbRow.transform, "StationCrumb", "", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextLabel);
         var crumbLe = _stationCrumbText.gameObject.AddComponent<LayoutElement>();
         crumbLe.flexibleWidth = 1f;
         crumbLe.preferredHeight = 24f;
 
         var favGo = new GameObject("FavoriteToggle", typeof(RectTransform), typeof(Image), typeof(Button), typeof(HorizontalLayoutGroup));
         favGo.transform.SetParent(crumbRow.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(favGo, width: 78f, height: 24f, flexW: 0f, flexH: 0f);
-        favGo.GetComponent<Image>().color = EftUiTemplateCache.ColorSubBarBg;
+        EftUiTemplateCache.SetFixedLayout(favGo, width: 92f, height: 26f, flexW: 0f, flexH: 0f);
+        favGo.GetComponent<Image>().color = EftUiTemplateCache.ColorRowIdle;
         _favToggleBtn = favGo.GetComponent<Button>();
         _favToggleBtn.onClick.AddListener(() =>
         {
@@ -198,25 +217,25 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
 
         var starGo = new GameObject("Star", typeof(RectTransform), typeof(Image));
         starGo.transform.SetParent(favGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(starGo, width: 14f, height: 14f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(starGo, width: 18f, height: 18f, flexW: 0f, flexH: 0f);
         _favToggleIcon = starGo.GetComponent<Image>();
         _favToggleIcon.preserveAspect = true;
         _favToggleIcon.raycastTarget = false;
-        _favToggleLabel = _tpl.CreateText(favGo.transform, "Label", "收藏", 12f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Center);
+        _favToggleLabel = _tpl.CreateText(favGo.transform, "Label", "收藏", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Center);
 
         Build3DPreviewBox();
         Build2DFallbackPreview();
         BuildCleanProductHeader();
 
         // Compact craft stats bar
-        _metaStatsText = _tpl.CreateText(_bodyPanel.transform, "MetaStats", "", 12.5f, EftUiTemplateCache.ColorAccentReady);
-        EftUiTemplateCache.SetFixedLayout(_metaStatsText.gameObject, height: 20f, flexW: -1f, flexH: 0f);
+        _metaStatsText = _tpl.CreateText(_bodyPanel.transform, "MetaStats", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextBright);
+        EftUiTemplateCache.SetFixedLayout(_metaStatsText.gameObject, height: 22f, flexW: -1f, flexH: 0f);
 
         // Requirements header
         var reqHeaderRow = new GameObject("ReqHeader", typeof(RectTransform));
         reqHeaderRow.transform.SetParent(_bodyPanel.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(reqHeaderRow, height: 22f, flexW: -1f, flexH: 0f);
-        _requirementsHeader = _tpl.CreateText(reqHeaderRow.transform, "Title", "所需材料与工具", 13.5f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
+        EftUiTemplateCache.SetFixedLayout(reqHeaderRow, height: 26f, flexW: -1f, flexH: 0f);
+        _requirementsHeader = _tpl.CreateText(reqHeaderRow.transform, "Title", "所需材料与工具", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextLabel);
         EftUiTemplateCache.Stretch(_requirementsHeader.rectTransform);
         _tpl.CreateDivider(reqHeaderRow.transform, "Divider", vertical: false);
 
@@ -232,58 +251,88 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
         // Fuel warning banner
         _fuelWarningBar = new GameObject("FuelWarning", typeof(RectTransform), typeof(Image));
         _fuelWarningBar.transform.SetParent(_bodyPanel.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(_fuelWarningBar, height: 24f, flexW: -1f, flexH: 0f);
-        _fuelWarningBar.GetComponent<Image>().color = new Color(0.55f, 0.16f, 0.12f, 0.50f);
-        TextMeshProUGUI fuelWarnTxt = _tpl.CreateText(_fuelWarningBar.transform, "Text", "需要开启发电机以开始或持续制作", 12f, new Color32(238, 178, 118, 255), TextAlignmentOptions.Center);
+        EftUiTemplateCache.SetFixedLayout(_fuelWarningBar, height: 26f, flexW: -1f, flexH: 0f);
+        _fuelWarningBar.GetComponent<Image>().color = EftUiTemplateCache.ColorWarnBg;
+        TextMeshProUGUI fuelWarnTxt = _tpl.CreateText(_fuelWarningBar.transform, "Text", "需要开启发电机以开始或持续制作", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorWarnText, TextAlignmentOptions.Center);
         EftUiTemplateCache.Stretch(fuelWarnTxt.rectTransform, 6f, 6f, 0f, 0f);
         _fuelWarningBar.SetActive(false);
 
         // Progress bar (visible when Producing / Ready)
         _progressPanel = new GameObject("ProgressPanel", typeof(RectTransform), typeof(Image));
         _progressPanel.transform.SetParent(_bodyPanel.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(_progressPanel, height: 24f, flexW: -1f, flexH: 0f);
-        _progressPanel.GetComponent<Image>().color = new Color(0.10f, 0.12f, 0.10f, 0.90f);
-        _progressBarFill = _tpl.CreatePanel(_progressPanel.transform, "Fill", new Color(0.28f, 0.56f, 0.28f, 0.65f));
+        // Vanilla percentage track (black 42%) with the ProductionStatus text style (bold 16, #CAD6DC)
+        EftUiTemplateCache.SetFixedLayout(_progressPanel, height: 30f, flexW: -1f, flexH: 0f);
+        _progressPanel.GetComponent<Image>().color = EftUiTemplateCache.ColorTrackBg;
+        Color fillColor = EftUiTemplateCache.ColorAccentProducing;
+        fillColor.a = 0.45f;
+        _progressBarFill = _tpl.CreatePanel(_progressPanel.transform, "Fill", fillColor);
         _progressBarFill.rectTransform.anchorMin = Vector2.zero;
         _progressBarFill.rectTransform.anchorMax = new Vector2(0f, 1f);
         _progressBarFill.rectTransform.pivot = new Vector2(0f, 0.5f);
         _progressBarFill.rectTransform.offsetMin = Vector2.zero;
         _progressBarFill.rectTransform.offsetMax = Vector2.zero;
-        _progressText = _tpl.CreateText(_progressPanel.transform, "Label", "", 12.5f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Center, FontStyles.Bold);
+        _progressText = _tpl.CreateText(_progressPanel.transform, "Label", "", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextBright, TextAlignmentOptions.Center, FontStyles.Bold);
         EftUiTemplateCache.Stretch(_progressText.rectTransform, 4f, 4f, 0f, 0f);
         _progressPanel.SetActive(false);
 
         // Status / lock hint
-        _hintText = _tpl.CreateText(_bodyPanel.transform, "ActionHint", "", 12f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Center);
-        EftUiTemplateCache.SetFixedLayout(_hintText.gameObject, height: 18f, flexW: -1f, flexH: 0f);
+        _hintText = _tpl.CreateText(_bodyPanel.transform, "ActionHint", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Center);
+        EftUiTemplateCache.SetFixedLayout(_hintText.gameObject, height: 20f, flexW: -1f, flexH: 0f);
 
-        // Action Buttons Dock (fixed 36px)
+        // Action dock: one wide primary action per state, secondary actions at a fixed narrower width.
         var dockGo = new GameObject("ActionDock", typeof(RectTransform), typeof(HorizontalLayoutGroup));
         dockGo.transform.SetParent(_bodyPanel.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(dockGo, height: 36f, flexW: -1f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(dockGo, height: 42f, flexW: -1f, flexH: 0f);
         var dockHlg = dockGo.GetComponent<HorizontalLayoutGroup>();
         dockHlg.spacing = 8f;
+        dockHlg.childAlignment = TextAnchor.MiddleRight;
         dockHlg.childControlWidth = true;
         dockHlg.childControlHeight = true;
-        dockHlg.childForceExpandWidth = true;
+        dockHlg.childForceExpandWidth = false;
         dockHlg.childForceExpandHeight = false;
 
-        _startBtn = _tpl.CloneActionButton(dockGo.transform, "BtnStart", "开始制造", 0f, 34f, 15, () => RunSafe(ExecuteStartAsync));
-        _buyAllBtn = _tpl.CloneActionButton(dockGo.transform, "BtnBuyAll", "购齐缺料", 0f, 34f, 14, HandleBuyAllMissing);
-        _collectBtn = _tpl.CloneActionButton(dockGo.transform, "BtnCollect", "领取成品", 0f, 34f, 15, () => RunSafe(() => ExecuteCollectAsync(repeatAfter: false)));
-        _collectRepeatBtn = _tpl.CloneActionButton(dockGo.transform, "BtnCollectRepeat", "领完再造", 0f, 34f, 14, () => RunSafe(() => ExecuteCollectAsync(repeatAfter: true)));
-        _restartBtn = _tpl.CloneActionButton(dockGo.transform, "BtnRestart", "重新开始", 0f, 34f, 14, () => RunSafe(ExecuteRestartAsync));
-        _cancelBtn = _tpl.CloneActionButton(dockGo.transform, "BtnCancel", "取消制造", 0f, 34f, 14, () => RunSafe(ExecuteCancelAsync));
+        _startBtn = CreateDockButton(dockGo.transform, "BtnStart", "开始制造", primary: true, () => RunSafe(ExecuteStartAsync));
+        _buyAllBtn = CreateDockButton(dockGo.transform, "BtnBuyAll", "购齐缺料", primary: false, HandleBuyAllMissing);
+        _collectBtn = CreateDockButton(dockGo.transform, "BtnCollect", "领取成品", primary: true, () => RunSafe(() => ExecuteCollectAsync(repeatAfter: false)));
+        _collectRepeatBtn = CreateDockButton(dockGo.transform, "BtnCollectRepeat", "领完再造", primary: false, () => RunSafe(() => ExecuteCollectAsync(repeatAfter: true)));
+        _restartBtn = CreateDockButton(dockGo.transform, "BtnRestart", "重新开始", primary: true, () => RunSafe(ExecuteRestartAsync));
+        _cancelBtn = CreateDockButton(dockGo.transform, "BtnCancel", "取消制造", primary: false, () => RunSafe(ExecuteCancelAsync));
+    }
+
+    private DefaultUIButton CreateDockButton(Transform parent, string name, string text, bool primary, UnityEngine.Events.UnityAction onClick)
+    {
+        const float SecondaryWidth = 132f;
+        const float Height = 40f;
+
+        DefaultUIButton btn = _tpl.CloneActionButton(parent, name, text, primary ? 0f : SecondaryWidth, Height, primary ? 20 : 16, onClick);
+        if (btn != null && primary)
+        {
+            LayoutElement le = btn.gameObject.GetOrAddComponent<LayoutElement>();
+            le.minWidth = SecondaryWidth;
+            le.flexibleWidth = 1f;
+        }
+        return btn;
     }
 
     private void Build3DPreviewBox()
     {
         _preview3DBox = new GameObject("Preview3DBox", typeof(RectTransform), typeof(Image));
         _preview3DBox.transform.SetParent(_bodyPanel.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(_preview3DBox, height: 172f, flexW: -1f, flexH: 0f);
-        _preview3DBox.GetComponent<Image>().color = new Color(0.025f, 0.028f, 0.032f, 0.95f);
+        // Vanilla item preview is 800x228 with the info_window_back hatch pattern and an amber corner glow.
+        EftUiTemplateCache.SetFixedLayout(_preview3DBox, height: 204f, flexW: -1f, flexH: 0f);
+        _preview3DBox.GetComponent<Image>().color = EftUiTemplateCache.ColorPreviewBg;
 
-        AddOutlineBorder(_preview3DBox.transform, EftUiTemplateCache.ColorCardBorder);
+        if (_tpl.PreviewBackSprite != null)
+        {
+            Image pattern = _tpl.CreatePanel(_preview3DBox.transform, "Pattern", Color.white);
+            pattern.sprite = _tpl.PreviewBackSprite;
+            EftUiTemplateCache.Stretch(pattern.rectTransform);
+        }
+
+        if (_tpl.CreateFrame(_preview3DBox.transform, "Frame", _tpl.BorderGenericSprite, EftUiTemplateCache.ColorCardBorder) == null)
+        {
+            AddOutlineBorder(_preview3DBox.transform, EftUiTemplateCache.ColorCardBorder);
+        }
 
         if (_tpl.CameraImageTemplate != null)
         {
@@ -298,17 +347,37 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
             }
 
             var relay = _cameraImage.gameObject.AddComponent<PreviewInputRelay>();
-            relay.OnDragDelta = delta => _weaponPreview?.Rotate(delta.x, delta.y);
-            relay.OnScrollDelta = delta => _weaponPreview?.Zoom(delta * 0.12f);
+            relay.OnDragDelta = delta =>
+            {
+                _weaponPreview?.Rotate(delta.x, delta.y);
+                KeepPreviewRendering(PreviewInteractSeconds);
+            };
+            relay.OnScrollDelta = delta =>
+            {
+                _weaponPreview?.Zoom(delta * 0.12f);
+                KeepPreviewRendering(PreviewInteractSeconds);
+            };
             _cameraImage.gameObject.SetActive(false);
+        }
+
+        if (_tpl.PreviewCornerSprite != null)
+        {
+            Image corner = _tpl.CreatePanel(_preview3DBox.transform, "CornerGlow", Color.white);
+            corner.sprite = _tpl.PreviewCornerSprite;
+            RectTransform cornerRt = corner.rectTransform;
+            cornerRt.anchorMin = Vector2.zero;
+            cornerRt.anchorMax = Vector2.zero;
+            cornerRt.pivot = Vector2.zero;
+            cornerRt.anchoredPosition = new Vector2(2f, 2f);
+            cornerRt.sizeDelta = new Vector2(124f, 122f);
         }
 
         TextMeshProUGUI dragHint = _tpl.CreateText(
             _preview3DBox.transform,
             "DragHint",
             "左键拖拽旋转 · 滚轮缩放",
-            11f,
-            new Color32(140, 146, 150, 180),
+            13f,
+            EftUiTemplateCache.ColorTextLabel,
             TextAlignmentOptions.BottomRight);
         var hintRt = dragHint.rectTransform;
         hintRt.anchorMin = new Vector2(0f, 0f);
@@ -322,32 +391,50 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
     {
         _productMetaPanel = new GameObject("ProductHeader", typeof(RectTransform), typeof(VerticalLayoutGroup));
         _productMetaPanel.transform.SetParent(_bodyPanel.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(_productMetaPanel, height: 42f, flexW: -1f, flexH: 0f);
+        // Mirrors the handbook description caption: name on a 7% white strip (18), then item type left and
+        // weight right underneath (14, #A6B0B5).
+        EftUiTemplateCache.SetFixedLayout(_productMetaPanel, height: 60f, flexW: -1f, flexH: 0f);
         var vlg = _productMetaPanel.GetComponent<VerticalLayoutGroup>();
-        vlg.spacing = 2f;
+        vlg.spacing = 3f;
         vlg.childControlWidth = true;
         vlg.childControlHeight = true;
         vlg.childForceExpandWidth = true;
         vlg.childForceExpandHeight = false;
 
-        var titleRow = new GameObject("TitleRow", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+        var titleRow = new GameObject("TitleRow", typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup));
         titleRow.transform.SetParent(_productMetaPanel.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(titleRow, height: 22f, flexW: -1f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(titleRow, height: 36f, flexW: -1f, flexH: 0f);
+        Image titleBg = titleRow.GetComponent<Image>();
+        titleBg.color = EftUiTemplateCache.ColorCaptionPanel;
+        titleBg.raycastTarget = false;
         var tHlg = titleRow.GetComponent<HorizontalLayoutGroup>();
-        tHlg.spacing = 6f;
+        tHlg.padding = new RectOffset(10, 10, 0, 0);
+        tHlg.childAlignment = TextAnchor.MiddleLeft;
         tHlg.childControlWidth = true;
         tHlg.childControlHeight = true;
         tHlg.childForceExpandWidth = false;
         tHlg.childForceExpandHeight = true;
 
-        _productTitleText = _tpl.CreateText(titleRow.transform, "Name", "", 16.5f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
+        _productTitleText = _tpl.CreateText(titleRow.transform, "Name", "", EftUiTemplateCache.FontName, EftUiTemplateCache.ColorTextPrimary);
         _productTitleText.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
 
-        _productWeightText = _tpl.CreateText(titleRow.transform, "Weight", "", 12.5f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
-        EftUiTemplateCache.SetFixedLayout(_productWeightText.gameObject, width: 64f, height: 20f, flexW: 0f, flexH: 0f);
+        var subRow = new GameObject("SubRow", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+        subRow.transform.SetParent(_productMetaPanel.transform, worldPositionStays: false);
+        EftUiTemplateCache.SetFixedLayout(subRow, height: 20f, flexW: -1f, flexH: 0f);
+        var sHlg = subRow.GetComponent<HorizontalLayoutGroup>();
+        sHlg.padding = new RectOffset(10, 10, 0, 0);
+        sHlg.spacing = 8f;
+        sHlg.childAlignment = TextAnchor.MiddleLeft;
+        sHlg.childControlWidth = true;
+        sHlg.childControlHeight = true;
+        sHlg.childForceExpandWidth = false;
+        sHlg.childForceExpandHeight = true;
 
-        _productCategoryText = _tpl.CreateText(_productMetaPanel.transform, "Category", "", 12f, EftUiTemplateCache.ColorTextMuted);
-        EftUiTemplateCache.SetFixedLayout(_productCategoryText.gameObject, height: 17f, flexW: -1f, flexH: 0f);
+        _productCategoryText = _tpl.CreateText(subRow.transform, "Category", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary);
+        _productCategoryText.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
+
+        _productWeightText = _tpl.CreateText(subRow.transform, "Weight", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
+        EftUiTemplateCache.SetFixedLayout(_productWeightText.gameObject, width: 80f, height: 20f, flexW: 0f, flexH: 0f);
     }
 
     private void Build2DFallbackPreview()
@@ -355,8 +442,11 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
         _fallback2DPanel = new GameObject("Fallback2D", typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup));
         _fallback2DPanel.transform.SetParent(_bodyPanel.transform, worldPositionStays: false);
         EftUiTemplateCache.SetFixedLayout(_fallback2DPanel, height: 92f, flexW: -1f, flexH: 0f);
-        _fallback2DPanel.GetComponent<Image>().color = EftUiTemplateCache.ColorSubBarBg;
-        AddOutlineBorder(_fallback2DPanel.transform, EftUiTemplateCache.ColorCardBorder);
+        _fallback2DPanel.GetComponent<Image>().color = EftUiTemplateCache.ColorCaptionPanel;
+        if (_tpl.CreateFrame(_fallback2DPanel.transform, "Frame", _tpl.BorderGenericSprite, EftUiTemplateCache.ColorCardBorder) == null)
+        {
+            AddOutlineBorder(_fallback2DPanel.transform, EftUiTemplateCache.ColorCardBorder);
+        }
 
         var hlg = _fallback2DPanel.GetComponent<HorizontalLayoutGroup>();
         hlg.padding = new RectOffset(10, 10, 8, 8);
@@ -389,11 +479,11 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
         vlg.childForceExpandWidth = true;
         vlg.childForceExpandHeight = false;
 
-        _fallback2DTitle = _tpl.CreateText(textCol.transform, "Title", "", 16f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
+        _fallback2DTitle = _tpl.CreateText(textCol.transform, "Title", "", EftUiTemplateCache.FontName, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
         _fallback2DTitle.enableWordWrapping = true;
-        EftUiTemplateCache.SetFixedLayout(_fallback2DTitle.gameObject, height: 38f, flexW: -1f, flexH: 0f);
-        _fallback2DCategory = _tpl.CreateText(textCol.transform, "Category", "", 12.5f, EftUiTemplateCache.ColorTextSecondary);
-        EftUiTemplateCache.SetFixedLayout(_fallback2DCategory.gameObject, height: 18f, flexW: -1f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(_fallback2DTitle.gameObject, height: 44f, flexW: -1f, flexH: 0f);
+        _fallback2DCategory = _tpl.CreateText(textCol.transform, "Category", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary);
+        EftUiTemplateCache.SetFixedLayout(_fallback2DCategory.gameObject, height: 20f, flexW: -1f, flexH: 0f);
     }
 
     private void AddOutlineBorder(Transform parent, Color color)
@@ -425,6 +515,9 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
 
     internal void SetEntry(WorkshopCatalogModel.RecipeEntry entry)
     {
+        // SetEntry also runs on every catalog refresh; only a different recipe gets a transition.
+        bool recipeChanged = entry != null
+            && !string.Equals(_entry?.SchemeId, entry.SchemeId, StringComparison.Ordinal);
         _entry = entry;
 
         if (entry == null)
@@ -442,6 +535,12 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
 
         UpdatePreview();
         UpdateDynamicDetails();
+
+        if (recipeChanged)
+        {
+            _bodyFader ??= UiFader.For(_bodyPanel);
+            _bodyFader.Play(0f, 1f, WorkshopFx.ContentFade);
+        }
     }
 
     internal void RefreshCurrent()
@@ -478,6 +577,7 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
             }
             _weaponPreview = null;
         }
+        ResetPreviewRenderState();
 
         if (_fallback2DFactory != null)
         {
@@ -579,10 +679,34 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
                 _weaponPreview.Init();
             }
 
-            _cameraImage.gameObject.SetActive(true);
-            _cameraImage.InitCamera(_weaponPreview.WeaponPreviewCamera);
-            _weaponPreview.SetupItemPreview(schemeItem);
+            Camera previewCamera = _weaponPreview.WeaponPreviewCamera;
+            if (!_cameraImage.gameObject.activeSelf)
+            {
+                _cameraImage.gameObject.SetActive(true);
+            }
+
+            // InitCamera always releases and reallocates the 2x RenderTexture; only rebind when the camera changed
+            // or CameraImage dropped its texture (e.g. after OnDisable).
+            if (previewCamera == null
+                || !ReferenceEquals(_cameraImage.targetCamera, previewCamera)
+                || previewCamera.targetTexture == null)
+            {
+                _cameraImage.InitCamera(previewCamera);
+            }
+
+            // Hide the image until the new model is in: otherwise the previous item lingers and the new one
+            // pops in whenever its bundles finish. OnPreviewModelLoaded (or the timeout) fades it back.
+            // Armed before SetupItemPreview because the callback fires synchronously for cached bundles.
+            _previewFader ??= UiFader.For(_cameraImage.gameObject);
+            _previewFader.Snap(0f);
+            _previewRevealPending = true;
+            _previewRevealDeadline = Time.unscaledTime + PreviewRevealTimeout;
+
+            ReleaseStaleResolutionBinding(_weaponPreview);
+            _onPreviewModelLoaded ??= OnPreviewModelLoaded;
+            _weaponPreview.SetupItemPreview(schemeItem, onLoadingFinished: _onPreviewModelLoaded);
             _weaponPreview.ResetRotator(-1.5f);
+            KeepPreviewRendering(PreviewSettleSeconds);
             return true;
         }
         catch (Exception ex)
@@ -609,6 +733,109 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
             }
             _weaponPreview = null;
         }
+        ResetPreviewRenderState();
+    }
+
+    private void OnPreviewModelLoaded()
+    {
+        // The new model is instantiated right after this callback; give texture streaming time to settle.
+        KeepPreviewRendering(PreviewSettleSeconds);
+        RevealPreview();
+    }
+
+    private void RevealPreview()
+    {
+        if (!_previewRevealPending)
+        {
+            return;
+        }
+        _previewRevealPending = false;
+        _previewFader?.Play(0f, 1f, WorkshopFx.PreviewFade);
+    }
+
+    private void KeepPreviewRendering(float seconds)
+    {
+        float until = Time.unscaledTime + seconds;
+        if (until > _previewRenderUntil)
+        {
+            _previewRenderUntil = until;
+        }
+    }
+
+    private void ResetPreviewRenderState()
+    {
+        _previewRenderUntil = -1f;
+        _lastPreviewTexture = null;
+        _previewRevealPending = false;
+        _previewFader?.Snap(1f);
+    }
+
+    private void LateUpdate()
+    {
+        if (_cameraImage == null || _weaponPreview == null)
+        {
+            return;
+        }
+
+        // Never leave the preview hidden if the load callback does not arrive.
+        if (_previewRevealPending && Time.unscaledTime >= _previewRevealDeadline)
+        {
+            RevealPreview();
+        }
+
+        Camera cam = _cameraImage.targetCamera;
+        if (cam == null)
+        {
+            return;
+        }
+
+        RenderTexture rt = cam.targetTexture;
+        if (rt == null)
+        {
+            // CameraImage is disabled or cleaned up and already turned the camera off.
+            _lastPreviewTexture = null;
+            return;
+        }
+
+        // CameraImage.RecreateTexture (resize / re-enable) hands us a blank texture, and GPU resets can drop
+        // the contents of the existing one: render again in both cases.
+        if (!ReferenceEquals(rt, _lastPreviewTexture) || !rt.IsCreated())
+        {
+            _lastPreviewTexture = rt;
+            KeepPreviewRendering(PreviewSettleSeconds);
+        }
+
+        bool shouldRender = Time.unscaledTime < _previewRenderUntil;
+        if (cam.enabled != shouldRender)
+        {
+            cam.enabled = shouldRender;
+        }
+    }
+
+    private static HarmonyLib.AccessTools.FieldRef<WeaponPreview, Action> CreateResolutionBindingRef()
+    {
+        try
+        {
+            return HarmonyLib.AccessTools.FieldRefAccess<WeaponPreview, Action>("_resolutionBinding");
+        }
+        catch (Exception ex)
+        {
+            HideoutQoLPlugin.Log?.LogWarning($"HideoutQoL: WeaponPreview._resolutionBinding not found, display-settings subscriptions will not be released: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static void ReleaseStaleResolutionBinding(WeaponPreview preview)
+    {
+        if (ResolutionBindingRef == null || preview == null)
+        {
+            return;
+        }
+
+        ref Action binding = ref ResolutionBindingRef(preview);
+        Action unbind = binding;
+        binding = null;
+        unbind?.Invoke();
     }
 
     private static Item CreateProductItem(WorkshopCatalogModel.RecipeEntry entry)
@@ -745,7 +972,8 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
                 {
                     tags += " [战局发现]";
                 }
-                row.DetailText.SetMonospaceText($"库存 {owned} / 需要 {need}{tags}", onlyDigits: true);
+                // Vanilla requirement counter format ("700/2500")
+                row.DetailText.SetMonospaceText($"{owned}/{need}{tags}", onlyDigits: true);
                 row.DetailText.color = isTool && !fulfilled
                     ? EftUiTemplateCache.ColorAccentTool
                     : (fulfilled ? EftUiTemplateCache.ColorAccentCraftable : EftUiTemplateCache.ColorAccentMissing);
@@ -792,7 +1020,7 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
         var rowGo = new GameObject("MaterialRow", typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup));
         rowGo.transform.SetParent(parent, worldPositionStays: false);
         rowGo.GetComponent<Image>().color = EftUiTemplateCache.ColorRowIdle;
-        EftUiTemplateCache.SetFixedLayout(rowGo, height: 58f, flexW: -1f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(rowGo, height: 60f, flexW: -1f, flexH: 0f);
 
         var hlg = rowGo.GetComponent<HorizontalLayoutGroup>();
         hlg.padding = new RectOffset(0, 6, 4, 4);
@@ -804,7 +1032,7 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
         hlg.childForceExpandHeight = false;
 
         Image stripe = _tpl.CreatePanel(rowGo.transform, "Stripe", EftUiTemplateCache.ColorAccentMissing);
-        EftUiTemplateCache.SetFixedLayout(stripe.gameObject, width: 3f, height: 50f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(stripe.gameObject, width: 3f, height: 52f, flexW: 0f, flexH: 0f);
 
         var iconSlot = new GameObject("ReqIcon", typeof(RectTransform));
         iconSlot.transform.SetParent(rowGo.transform, worldPositionStays: false);
@@ -835,10 +1063,10 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
         vlg.childForceExpandWidth = true;
         vlg.childForceExpandHeight = false;
 
-        TextMeshProUGUI nameText = _tpl.CreateText(textCol.transform, "Name", "", 13.5f, EftUiTemplateCache.ColorTextPrimary);
-        EftUiTemplateCache.SetFixedLayout(nameText.gameObject, height: 20f, flexW: -1f, flexH: 0f);
-        TextMeshProUGUI detailText = _tpl.CreateText(textCol.transform, "Count", "", 12f, EftUiTemplateCache.ColorTextSecondary);
-        EftUiTemplateCache.SetFixedLayout(detailText.gameObject, height: 18f, flexW: -1f, flexH: 0f);
+        TextMeshProUGUI nameText = _tpl.CreateText(textCol.transform, "Name", "", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextPrimary);
+        EftUiTemplateCache.SetFixedLayout(nameText.gameObject, height: 22f, flexW: -1f, flexH: 0f);
+        TextMeshProUGUI detailText = _tpl.CreateText(textCol.transform, "Count", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary);
+        EftUiTemplateCache.SetFixedLayout(detailText.gameObject, height: 20f, flexW: -1f, flexH: 0f);
 
         var row = new MaterialRow
         {
@@ -851,23 +1079,23 @@ internal sealed class WorkshopInspectorPane : MonoBehaviour
 
         var btnCol = new GameObject("BtnCol", typeof(RectTransform), typeof(VerticalLayoutGroup));
         btnCol.transform.SetParent(rowGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(btnCol, width: 64f, height: 50f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(btnCol, width: 72f, height: 52f, flexW: 0f, flexH: 0f);
         var btnVlg = btnCol.GetComponent<VerticalLayoutGroup>();
-        btnVlg.spacing = 3f;
+        btnVlg.spacing = 2f;
         btnVlg.childAlignment = TextAnchor.MiddleCenter;
         btnVlg.childControlWidth = true;
         btnVlg.childControlHeight = true;
         btnVlg.childForceExpandWidth = true;
         btnVlg.childForceExpandHeight = false;
 
-        row.ReverseSearchBtn = _tpl.CloneActionButton(btnCol.transform, "ReverseBtn", "反查", 62f, 23f, 11, () =>
+        row.ReverseSearchBtn = _tpl.CloneActionButton(btnCol.transform, "ReverseBtn", "反查", 70f, 25f, 13, () =>
         {
             if (!string.IsNullOrEmpty(row.BoundItemName))
             {
                 _onReverseSearchIngredient?.Invoke(row.BoundItemName);
             }
         });
-        row.BuySingleBtn = _tpl.CloneActionButton(btnCol.transform, "BuyOneBtn", "跳蚤", 62f, 23f, 11, () =>
+        row.BuySingleBtn = _tpl.CloneActionButton(btnCol.transform, "BuyOneBtn", "跳蚤", 70f, 25f, 13, () =>
         {
             if (row.BoundReq != null && row.MissingCount > 0)
             {

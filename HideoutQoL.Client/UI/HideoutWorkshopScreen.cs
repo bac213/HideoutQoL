@@ -29,6 +29,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         public GameObject Root;
         public Button Button;
         public Image Background;
+        public HoverTint Tint;
         public TextMeshProUGUI Label;
     }
 
@@ -36,6 +37,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         public GameObject Root;
         public Image Background;
+        public HoverTint Tint;
         public Button RowButton;
         public Button ArrowButton;
         public Image ArrowIcon;
@@ -51,6 +53,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         public GameObject Root;
         public Image Background;
+        public HoverTint Tint;
         public Button Button;
         public TextMeshProUGUI TitleText;
         public TextMeshProUGUI BadgeText;
@@ -69,6 +72,12 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     private Action _onCloseRequested;
     private bool _built;
     private bool _isOpen;
+    private bool _closingSoft;
+    private UiFader _windowFader;
+    private LayoutElement _stationHostLayout;
+
+    /// <summary>True while the window is usable; false as soon as a close (including its fade-out) starts.</summary>
+    internal bool IsOpen => _isOpen;
     private bool _eventsHooked;
 
     // Header widgets
@@ -147,8 +156,20 @@ internal sealed class HideoutWorkshopScreen : UIScreen
 
         Image frameBg = _tpl.CreatePanel(transform, "Backdrop", EftUiTemplateCache.ColorWindowScrim, raycastTarget: true);
         EftUiTemplateCache.Stretch(frameBg.rectTransform);
+
+        // Same backdrop stack as the handbook: main_part_gradient + top/bottom shadows, framed by border_shadow.
+        if (_tpl.MainGradientSprite != null)
+        {
+            Image gradient = _tpl.CreatePanel(transform, "Gradient", Color.white);
+            gradient.sprite = _tpl.MainGradientSprite;
+            gradient.type = Image.Type.Sliced;
+            EftUiTemplateCache.Stretch(gradient.rectTransform);
+        }
         _tpl.AddShadowPair(transform);
-        AddFrameOutline(transform);
+        if (_tpl.CreateFrame(transform, "Frame", _tpl.BorderShadowSprite, Color.white, outset: 2f) == null)
+        {
+            AddFrameOutline(transform);
+        }
 
         var rootVlgGO = new GameObject("RootLayout", typeof(RectTransform), typeof(VerticalLayoutGroup));
         rootVlgGO.transform.SetParent(transform, worldPositionStays: false);
@@ -188,12 +209,15 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         var headerGo = new GameObject("Header", typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup));
         headerGo.transform.SetParent(parent, worldPositionStays: false);
-        headerGo.GetComponent<Image>().color = EftUiTemplateCache.ColorHeaderBg;
-        EftUiTemplateCache.SetFixedLayout(headerGo, height: 52f, flexW: -1f, flexH: 0f);
+        // Vanilla area caption band: line_fader_white at 12% white.
+        Image headerBg = headerGo.GetComponent<Image>();
+        headerBg.sprite = _tpl.LineFaderSprite;
+        headerBg.color = EftUiTemplateCache.ColorCaptionBand;
+        EftUiTemplateCache.SetFixedLayout(headerGo, height: 64f, flexW: -1f, flexH: 0f);
 
         var hlg = headerGo.GetComponent<HorizontalLayoutGroup>();
-        hlg.padding = new RectOffset(14, 14, 6, 6);
-        hlg.spacing = 10f;
+        hlg.padding = new RectOffset(16, 16, 6, 6);
+        hlg.spacing = 12f;
         hlg.childAlignment = TextAnchor.MiddleLeft;
         hlg.childControlWidth = true;
         hlg.childControlHeight = true;
@@ -202,42 +226,42 @@ internal sealed class HideoutWorkshopScreen : UIScreen
 
         var iconGo = new GameObject("StationIcon", typeof(RectTransform), typeof(Image));
         iconGo.transform.SetParent(headerGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(iconGo, width: 32f, height: 32f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(iconGo, width: 44f, height: 44f, flexW: 0f, flexH: 0f);
         _headerStationIcon = iconGo.GetComponent<Image>();
         _headerStationIcon.preserveAspect = true;
         _headerStationIcon.raycastTarget = false;
 
         var titleCol = new GameObject("TitleCol", typeof(RectTransform), typeof(VerticalLayoutGroup));
         titleCol.transform.SetParent(headerGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(titleCol, width: 250f, height: 38f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(titleCol, width: 460f, height: 50f, flexW: 0f, flexH: 0f);
         var titleVlg = titleCol.GetComponent<VerticalLayoutGroup>();
-        titleVlg.spacing = 1f;
+        titleVlg.spacing = 0f;
         titleVlg.childControlWidth = true;
         titleVlg.childControlHeight = true;
         titleVlg.childForceExpandWidth = true;
         titleVlg.childForceExpandHeight = false;
 
-        _headerTitleText = _tpl.CreateText(titleCol.transform, "Title", "藏身处制作工坊", 18f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
-        EftUiTemplateCache.SetFixedLayout(_headerTitleText.gameObject, height: 22f, flexW: -1f, flexH: 0f);
-        _headerCountsText = _tpl.CreateText(titleCol.transform, "SubCounts", "", 12f, EftUiTemplateCache.ColorTextSecondary);
-        EftUiTemplateCache.SetFixedLayout(_headerCountsText.gameObject, height: 15f, flexW: -1f, flexH: 0f);
+        _headerTitleText = _tpl.CreateText(titleCol.transform, "Title", "藏身处制作工坊", EftUiTemplateCache.FontTitle, EftUiTemplateCache.ColorTextTitle);
+        EftUiTemplateCache.SetFixedLayout(_headerTitleText.gameObject, height: 31f, flexW: -1f, flexH: 0f);
+        _headerCountsText = _tpl.CreateText(titleCol.transform, "SubCounts", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary);
+        EftUiTemplateCache.SetFixedLayout(_headerCountsText.gameObject, height: 19f, flexW: -1f, flexH: 0f);
 
         // Flexible spacer
         var spacer = new GameObject("Spacer", typeof(RectTransform), typeof(LayoutElement));
         spacer.transform.SetParent(headerGo.transform, worldPositionStays: false);
         spacer.GetComponent<LayoutElement>().flexibleWidth = 1f;
 
-        // Compact Generator status pill (fixed 224x32, subtle LED dot instead of oversized error icon)
+        // Generator status pill, styled after the vanilla area "Status" / fuel details pills (black 33%, bold 16)
         var genGo = new GameObject("GeneratorPill", typeof(RectTransform), typeof(Image), typeof(Button), typeof(HorizontalLayoutGroup));
         genGo.transform.SetParent(headerGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(genGo, width: 224f, height: 32f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(genGo, width: 280f, height: 36f, flexW: 0f, flexH: 0f);
         _generatorBtnBg = genGo.GetComponent<Image>();
-        _generatorBtnBg.color = EftUiTemplateCache.ColorSubBarBg;
+        _generatorBtnBg.color = EftUiTemplateCache.ColorInsetBg;
         _generatorBtn = genGo.GetComponent<Button>();
         _generatorBtn.onClick.AddListener(HandleToggleGenerator);
         var genHlg = genGo.GetComponent<HorizontalLayoutGroup>();
-        genHlg.padding = new RectOffset(10, 10, 4, 4);
-        genHlg.spacing = 8f;
+        genHlg.padding = new RectOffset(12, 10, 4, 4);
+        genHlg.spacing = 10f;
         genHlg.childAlignment = TextAnchor.MiddleCenter;
         genHlg.childControlWidth = true;
         genHlg.childControlHeight = true;
@@ -246,25 +270,25 @@ internal sealed class HideoutWorkshopScreen : UIScreen
 
         var ledGo = new GameObject("StatusDot", typeof(RectTransform), typeof(Image));
         ledGo.transform.SetParent(genGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(ledGo, width: 8f, height: 8f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(ledGo, width: 10f, height: 10f, flexW: 0f, flexH: 0f);
         _generatorLed = ledGo.GetComponent<Image>();
         _generatorLed.color = EftUiTemplateCache.ColorAccentProducing;
         _generatorLed.raycastTarget = false;
 
-        _generatorBtnText = _tpl.CreateText(genGo.transform, "Text", "发电机", 12.5f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left);
+        _generatorBtnText = _tpl.CreateText(genGo.transform, "Text", "发电机", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextBright, TextAlignmentOptions.Left, FontStyles.Bold);
         var genTxtLe = _generatorBtnText.gameObject.AddComponent<LayoutElement>();
         genTxtLe.flexibleWidth = 1f;
-        genTxtLe.minHeight = 20f;
-        genTxtLe.preferredHeight = 20f;
+        genTxtLe.minHeight = 22f;
+        genTxtLe.preferredHeight = 22f;
         genTxtLe.flexibleHeight = 0f;
 
-        _collectAllBtn = _tpl.CloneActionButton(headerGo.transform, "CollectAllBtn", "一键全领", 118f, 32f, 13, () => RunSafe(CollectAllReadyAsync));
-        _areaDetailsBtn = _tpl.CloneActionButton(headerGo.transform, "AreaDetailsBtn", "设施详情/升级", 132f, 32f, 13, HandleOpenVanillaAreaDetails);
+        _collectAllBtn = _tpl.CloneActionButton(headerGo.transform, "CollectAllBtn", "一键全领", 160f, 36f, 16, () => RunSafe(CollectAllReadyAsync));
+        _areaDetailsBtn = _tpl.CloneActionButton(headerGo.transform, "AreaDetailsBtn", "设施详情/升级", 172f, 36f, 16, HandleOpenVanillaAreaDetails);
         _backBtn = _tpl.CloneBackButton(headerGo.transform, "BackBtn", HandleCloseClicked);
         if (_backBtn != null)
         {
-            EftUiTemplateCache.SetFixedLayout(_backBtn.gameObject, width: 96f, height: 32f, flexW: 0f, flexH: 0f);
-            _backBtn.SetRawText("关闭", 14);
+            EftUiTemplateCache.SetFixedLayout(_backBtn.gameObject, width: 112f, height: 36f, flexW: 0f, flexH: 0f);
+            _backBtn.SetRawText("关闭", 16);
         }
 
         _tpl.CreateDivider(headerGo.transform, "HeaderBottomLine", vertical: false);
@@ -292,36 +316,37 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         var railGo = new GameObject("LeftRail", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup));
         railGo.transform.SetParent(parent, worldPositionStays: false);
-        railGo.GetComponent<Image>().color = EftUiTemplateCache.ColorPanelBg;
-        EftUiTemplateCache.SetFixedLayout(railGo, width: 262f, flexW: 0f, flexH: -1f);
+        // The handbook's category column has no fill of its own; the window gradient shows through.
+        railGo.GetComponent<Image>().enabled = false;
+        EftUiTemplateCache.SetFixedLayout(railGo, width: 300f, flexW: 0f, flexH: -1f);
 
         var vlg = railGo.GetComponent<VerticalLayoutGroup>();
-        vlg.padding = new RectOffset(8, 8, 8, 8);
-        vlg.spacing = 6f;
+        vlg.padding = new RectOffset(10, 10, 8, 8);
+        vlg.spacing = 4f;
         vlg.childControlWidth = true;
         vlg.childControlHeight = true;
         vlg.childForceExpandWidth = true;
         vlg.childForceExpandHeight = false;
 
-        var stationHdr = _tpl.CreateText(railGo.transform, "StationsHdr", "制作设施", 13.5f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Left, FontStyles.Bold);
-        EftUiTemplateCache.SetFixedLayout(stationHdr.gameObject, height: 20f, flexW: -1f, flexH: 0f);
+        _tpl.CreateColumnLabel(railGo.transform, "StationsHdr", "制作设施");
 
+        // 6 rows of 32 + 2 spacing fit without scrolling
         var stationScrollHost = new GameObject("StationScrollHost", typeof(RectTransform));
         stationScrollHost.transform.SetParent(railGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(stationScrollHost, height: 192f, flexW: -1f, flexH: 0f);
+        _stationHostLayout = EftUiTemplateCache.SetFixedLayout(stationScrollHost, height: StationListHeight(6), flexW: -1f, flexH: 0f);
         var (_, _, stationContent) = _tpl.CreateScrollView(stationScrollHost.transform, "StationScroll", addBottomPadding: false);
         _stationListContent = stationContent;
 
         // Divider between Stations and Categories
         var divHost = new GameObject("RailDivider", typeof(RectTransform));
         divHost.transform.SetParent(railGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(divHost, height: 2f, flexW: -1f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(divHost, height: 6f, flexW: -1f, flexH: 0f);
         _tpl.CreateDivider(divHost.transform, "Line", vertical: false);
 
         // Categories Header
         var catHdrRow = new GameObject("CategoriesHdrRow", typeof(RectTransform), typeof(HorizontalLayoutGroup));
         catHdrRow.transform.SetParent(railGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(catHdrRow, height: 24f, flexW: -1f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(catHdrRow, height: 26f, flexW: -1f, flexH: 0f);
         var catHlg = catHdrRow.GetComponent<HorizontalLayoutGroup>();
         catHlg.childControlWidth = true;
         catHlg.childControlHeight = true;
@@ -329,10 +354,10 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         catHlg.childForceExpandHeight = false;
         catHlg.childAlignment = TextAnchor.MiddleLeft;
 
-        var catHdr = _tpl.CreateText(catHdrRow.transform, "CategoriesHdr", "物品分类 (Handbook)", 13.5f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Left, FontStyles.Bold);
+        var catHdr = _tpl.CreateText(catHdrRow.transform, "CategoriesHdr", "物品分类", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextLabel);
         catHdr.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
 
-        _clearCategoryBtn = _tpl.CloneActionButton(catHdrRow.transform, "ClearCatBtn", "全部", 52f, 22f, 11, () =>
+        _clearCategoryBtn = _tpl.CloneActionButton(catHdrRow.transform, "ClearCatBtn", "全部", 60f, 24f, 13, () =>
         {
             _model.SelectedRootCategoryId = null;
             _model.SelectedSubCategoryId = null;
@@ -365,54 +390,54 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         centerGo.GetComponent<LayoutElement>().minWidth = 420f;
 
         var vlg = centerGo.GetComponent<VerticalLayoutGroup>();
-        vlg.padding = new RectOffset(10, 10, 8, 8);
-        vlg.spacing = 6f;
+        vlg.padding = new RectOffset(12, 12, 10, 8);
+        vlg.spacing = 8f;
         vlg.childControlWidth = true;
         vlg.childControlHeight = true;
         vlg.childForceExpandWidth = true;
         vlg.childForceExpandHeight = false;
 
-        // Toolbar Row 1: Status + Level + HideLocked chips (strictly 30px tall)
+        // Toolbar Row 1: Status + Level + HideLocked chips
         var row1 = new GameObject("FilterRow1", typeof(RectTransform), typeof(HorizontalLayoutGroup));
         row1.transform.SetParent(centerGo.transform, worldPositionStays: false);
         EftUiTemplateCache.SetFixedLayout(row1, height: 30f, flexW: -1f, flexH: 0f);
         var r1Hlg = row1.GetComponent<HorizontalLayoutGroup>();
-        r1Hlg.spacing = 5f;
+        r1Hlg.spacing = 4f;
         r1Hlg.childAlignment = TextAnchor.MiddleLeft;
         r1Hlg.childControlWidth = true;
         r1Hlg.childControlHeight = true;
         r1Hlg.childForceExpandWidth = false;
         r1Hlg.childForceExpandHeight = false;
 
-        AddStatusChip(row1.transform, WorkshopStatusFilter.All, "全部", 52f);
-        AddStatusChip(row1.transform, WorkshopStatusFilter.CraftableNow, "可立即做", 76f);
-        AddStatusChip(row1.transform, WorkshopStatusFilter.Favorites, "★ 收藏", 66f);
-        AddStatusChip(row1.transform, WorkshopStatusFilter.ActiveOrReady, "进行中/待领", 88f);
+        AddStatusChip(row1.transform, WorkshopStatusFilter.All, "全部", 60f);
+        AddStatusChip(row1.transform, WorkshopStatusFilter.CraftableNow, "可立即做", 88f);
+        AddStatusChip(row1.transform, WorkshopStatusFilter.Favorites, "★ 收藏", 76f);
+        AddStatusChip(row1.transform, WorkshopStatusFilter.ActiveOrReady, "进行中/待领", 108f);
 
         var sepGo = new GameObject("Sep", typeof(RectTransform), typeof(Image));
         sepGo.transform.SetParent(row1.transform, worldPositionStays: false);
         sepGo.GetComponent<Image>().color = EftUiTemplateCache.ColorHairline;
         EftUiTemplateCache.SetFixedLayout(sepGo, width: 1f, height: 20f, flexW: 0f, flexH: 0f);
 
-        AddLevelChip(row1.transform, 0, "全等级", 56f);
-        AddLevelChip(row1.transform, 1, "Lv.1", 44f);
-        AddLevelChip(row1.transform, 2, "Lv.2", 44f);
-        AddLevelChip(row1.transform, 3, "Lv.3", 44f);
+        AddLevelChip(row1.transform, 0, "全等级", 68f);
+        AddLevelChip(row1.transform, 1, "Lv.1", 52f);
+        AddLevelChip(row1.transform, 2, "Lv.2", 52f);
+        AddLevelChip(row1.transform, 3, "Lv.3", 52f);
 
         var r1Spacer = new GameObject("Spacer", typeof(RectTransform), typeof(LayoutElement));
         r1Spacer.transform.SetParent(row1.transform, worldPositionStays: false);
         r1Spacer.GetComponent<LayoutElement>().flexibleWidth = 1f;
 
-        _hideLockedChip = CreateChipButton(row1.transform, "HideLockedChip", "隐藏未解锁", 90f, () =>
+        _hideLockedChip = CreateChipButton(row1.transform, "HideLockedChip", "隐藏未解锁", 104f, () =>
         {
             _model.HideLocked = !_model.HideLocked;
             ApplyFilterMutation(resetScroll: true);
         });
 
-        // Toolbar Row 2: Search + Count + Sort DropDown (strictly 32px tall)
+        // Toolbar Row 2: Search + Count + Sort DropDown
         var row2 = new GameObject("FilterRow2", typeof(RectTransform), typeof(HorizontalLayoutGroup));
         row2.transform.SetParent(centerGo.transform, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(row2, height: 32f, flexW: -1f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(row2, height: 36f, flexW: -1f, flexH: 0f);
         var r2Hlg = row2.GetComponent<HorizontalLayoutGroup>();
         r2Hlg.spacing = 8f;
         r2Hlg.childAlignment = TextAnchor.MiddleLeft;
@@ -423,7 +448,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
 
         var searchWrap = new GameObject("SearchWrap", typeof(RectTransform));
         searchWrap.transform.SetParent(row2.transform, worldPositionStays: false);
-        var searchLe = EftUiTemplateCache.SetFixedLayout(searchWrap, height: 30f, flexW: 1f, flexH: 0f);
+        var searchLe = EftUiTemplateCache.SetFixedLayout(searchWrap, height: 36f, flexW: 1f, flexH: 0f);
         searchLe.minWidth = 160f;
 
         _searchInput = _tpl.CloneSearchField(searchWrap.transform, "搜索成品名称或所需材料/工具...");
@@ -442,14 +467,14 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         clearRt.pivot = new Vector2(1f, 0.5f);
         clearRt.anchoredPosition = new Vector2(-30f, 0f);
         clearRt.sizeDelta = new Vector2(20f, 20f);
-        clearGo.GetComponent<Image>().color = new Color(0.22f, 0.22f, 0.22f, 0.78f);
-        _tpl.CreateText(clearGo.transform, "X", "×", 14f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Center);
+        clearGo.GetComponent<Image>().color = EftUiTemplateCache.ColorRowIdle;
+        _tpl.CreateText(clearGo.transform, "X", "×", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Center);
         _searchClearBtn = clearGo.GetComponent<Button>();
         _searchClearBtn.onClick.AddListener(() => SetSearchQueryImmediate(string.Empty));
         clearGo.SetActive(false);
 
-        _resultCountText = _tpl.CreateText(row2.transform, "ResultCount", "", 13f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
-        EftUiTemplateCache.SetFixedLayout(_resultCountText.gameObject, width: 78f, height: 28f, flexW: 0f, flexH: 0f);
+        _resultCountText = _tpl.CreateText(row2.transform, "ResultCount", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
+        EftUiTemplateCache.SetFixedLayout(_resultCountText.gameObject, width: 92f, height: 28f, flexW: 0f, flexH: 0f);
 
         BuildSortSelector(row2.transform);
 
@@ -487,9 +512,9 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         empVlg.childForceExpandWidth = false;
         empVlg.childForceExpandHeight = false;
 
-        var empLbl = _tpl.CreateText(_emptyCatalogPanel.transform, "Hint", "没有符合当前筛选条件的配方", 15f, EftUiTemplateCache.ColorTextMuted, TextAlignmentOptions.Center);
-        empLbl.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
-        _tpl.CloneActionButton(_emptyCatalogPanel.transform, "ResetFiltersBtn", "重置筛选条件", 148f, 32f, 14, ResetAllFilters);
+        var empLbl = _tpl.CreateText(_emptyCatalogPanel.transform, "Hint", "没有符合当前筛选条件的配方", EftUiTemplateCache.FontName, EftUiTemplateCache.ColorTextLabel, TextAlignmentOptions.Center);
+        empLbl.gameObject.AddComponent<LayoutElement>().preferredHeight = 26f;
+        _tpl.CloneActionButton(_emptyCatalogPanel.transform, "ResetFiltersBtn", "重置筛选条件", 172f, 36f, 16, ResetAllFilters);
         _emptyCatalogPanel.SetActive(false);
 
         // Right vertical hairline
@@ -510,7 +535,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
             _sortDropdown = Instantiate(_tpl.DropDownTemplate, parent, worldPositionStays: false);
             _sortDropdown.name = "SortDropDown";
             _sortDropdown.gameObject.SetActive(true);
-            EftUiTemplateCache.SetFixedLayout(_sortDropdown.gameObject, width: 132f, height: 30f, flexW: 0f, flexH: 0f);
+            EftUiTemplateCache.SetFixedLayout(_sortDropdown.gameObject, width: 150f, height: 34f, flexW: 0f, flexH: 0f);
             _sortDropdown.Show(SortLabels);
             _sortDropdown.UpdateValue((int)_model.SortMode, sendCallback: false);
             _sortDropdown.OnValueChanged.Subscribe(idx =>
@@ -521,11 +546,11 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         }
         else
         {
-            _sortFallbackBtn = _tpl.CloneActionButton(parent, "SortCycleBtn", $"排序: {SortLabels[0]}", 132f, 30f, 13, () =>
+            _sortFallbackBtn = _tpl.CloneActionButton(parent, "SortCycleBtn", $"排序: {SortLabels[0]}", 150f, 34f, 14, () =>
             {
                 int next = ((int)_model.SortMode + 1) % SortLabels.Length;
                 _model.SortMode = (WorkshopSortMode)next;
-                _sortFallbackBtn.SetRawText($"排序: {SortLabels[next]}", 13);
+                _sortFallbackBtn.SetRawText($"排序: {SortLabels[next]}", 14);
                 ApplyFilterMutation(resetScroll: true);
             });
         }
@@ -535,8 +560,9 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         var inspGo = new GameObject("RightInspector", typeof(RectTransform), typeof(Image));
         inspGo.transform.SetParent(parent, worldPositionStays: false);
-        inspGo.GetComponent<Image>().color = EftUiTemplateCache.ColorPanelBg;
-        EftUiTemplateCache.SetFixedLayout(inspGo, width: 438f, flexW: 0f, flexH: -1f);
+        // Slightly darker than the list columns, like the handbook description pane.
+        inspGo.GetComponent<Image>().color = EftUiTemplateCache.ColorInsetBg;
+        EftUiTemplateCache.SetFixedLayout(inspGo, width: 470f, flexW: 0f, flexH: -1f);
 
         HideoutRepresentation hideout = Singleton<HideoutRepresentation>.Instantiated
             ? Singleton<HideoutRepresentation>.Instance
@@ -578,7 +604,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
         go.transform.SetParent(parent, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(go, width: width, height: 26f, flexW: 0f, flexH: 0f);
+        EftUiTemplateCache.SetFixedLayout(go, width: width, height: 28f, flexW: 0f, flexH: 0f);
 
         Image bg = go.GetComponent<Image>();
         bg.color = EftUiTemplateCache.ColorRowIdle;
@@ -586,7 +612,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         Button btn = go.GetComponent<Button>();
         btn.onClick.AddListener(() => onClick?.Invoke());
 
-        TextMeshProUGUI txt = _tpl.CreateText(go.transform, "Label", label, 12.5f, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Center);
+        TextMeshProUGUI txt = _tpl.CreateText(go.transform, "Label", label, EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Center);
         EftUiTemplateCache.Stretch(txt.rectTransform, 4f, 4f, 0f, 0f);
 
         return new ChipButton
@@ -594,6 +620,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
             Root = go,
             Button = btn,
             Background = bg,
+            Tint = HoverTint.Attach(go, bg),
             Label = txt,
         };
     }
@@ -630,10 +657,30 @@ internal sealed class HideoutWorkshopScreen : UIScreen
 
         EnsureDefaultSelection();
 
+        // Reopened during a fade-out: finish that close first so the state below starts clean.
+        if (_closingSoft)
+        {
+            Close();
+        }
+
         _isOpen = true;
+        bool alreadyVisible = gameObject.activeSelf;
         gameObject.SetActive(true);
         transform.SetAsLastSibling();
         ShowGameObject(instant: true);
+
+        _windowFader ??= UiFader.For(gameObject);
+        CanvasGroup.blocksRaycasts = true;
+        if (alreadyVisible)
+        {
+            _windowFader.Snap(1f);
+        }
+        else
+        {
+            // Started before the catalog is filled in below; the clamp in UiFader keeps the fade visible
+            // even though that work lands in this same frame.
+            _windowFader.Play(0f, 1f, WorkshopFx.WindowFadeIn);
+        }
 
         SubscribeHideoutEvents();
 
@@ -655,6 +702,39 @@ internal sealed class HideoutWorkshopScreen : UIScreen
 
     internal bool IsSearchFocused => _searchInput != null && _searchInput.isFocused;
 
+    /// <summary>
+    /// User-initiated close: stops interaction immediately, fades out, then runs the regular <see cref="Close"/>.
+    /// Anything that needs the window gone right now (overlay closing, vanilla drawer taking over) calls
+    /// <see cref="Close"/> directly, which also finishes a fade-out in progress.
+    /// </summary>
+    internal void CloseSoft()
+    {
+        if (!_isOpen)
+        {
+            return;
+        }
+        if (_windowFader == null || !gameObject.activeInHierarchy)
+        {
+            Close();
+            return;
+        }
+
+        _isOpen = false;
+        _closingSoft = true;
+        UnsubscribeHideoutEvents();
+        TryCloseOpenPopup();
+        CanvasGroup.blocksRaycasts = false;
+        _windowFader.Play(_windowFader.Alpha, 0f, WorkshopFx.WindowFadeOut, FinishSoftClose);
+    }
+
+    private void FinishSoftClose()
+    {
+        if (_closingSoft)
+        {
+            Close();
+        }
+    }
+
     public override void Close()
     {
         if (!_isOpen && !gameObject.activeSelf)
@@ -663,6 +743,12 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         }
 
         _isOpen = false;
+        _closingSoft = false;
+        if (_windowFader != null)
+        {
+            _windowFader.Snap(1f);
+            CanvasGroup.blocksRaycasts = true;
+        }
         UnsubscribeHideoutEvents();
 
         if (_sortDropdown != null && _sortDropdown.CurrentState)
@@ -807,7 +893,12 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     private void ApplyFilterMutation(bool resetScroll)
     {
         _model.SetFiltersAndRefresh();
-        SyncSelectionAfterDataChange();
+        // A filter change must not leave the inspector on a recipe that is no longer listed
+        // (state refreshes keep it, so a craft you just started stays inspected).
+        if (!IsSelectionListed())
+        {
+            EnsureDefaultSelection();
+        }
         RefreshAllUi(resetScroll);
     }
 
@@ -821,6 +912,24 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         {
             _selectedSchemeId = null;
         }
+    }
+
+    private bool IsSelectionListed()
+    {
+        if (string.IsNullOrEmpty(_selectedSchemeId))
+        {
+            return false;
+        }
+
+        IReadOnlyList<WorkshopCatalogModel.RecipeEntry> listed = _model.FilteredRecipes;
+        for (int i = 0; i < listed.Count; i++)
+        {
+            if (string.Equals(listed[i].SchemeId, _selectedSchemeId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void SyncSelectionAfterDataChange()
@@ -895,7 +1004,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         if (_collectAllBtn != null)
         {
             _collectAllBtn.gameObject.SetActive(_model.TotalReadyCount > 0);
-            _collectAllBtn.SetRawText($"一键全领 ({_model.TotalReadyCount})", 14);
+            _collectAllBtn.SetRawText($"一键全领 ({_model.TotalReadyCount})", 16);
             _collectAllBtn.Interactable = !_collectingAll && _model.TotalReadyCount > 0;
         }
 
@@ -956,7 +1065,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         if (!isActive)
         {
             _generatorBtnText.text = "未建造发电机";
-            _generatorBtnBg.color = EftUiTemplateCache.ColorSubBarBg;
+            _generatorBtnBg.color = EftUiTemplateCache.ColorInsetBg;
             _generatorLed.color = EftUiTemplateCache.ColorAccentLocked;
             _generatorBtn.interactable = false;
             return;
@@ -967,26 +1076,45 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         {
             string rem = fuel.Time > 0 ? WorkshopRecipeTile.FormatCompactDuration(fuel.Time) : "--:--";
             _generatorBtnText.SetMonospaceText($"运行中 · {rem} ({fuel.Percentages}%)", onlyDigits: true);
-            _generatorBtnBg.color = new Color(0.14f, 0.24f, 0.14f, 0.90f);
+            _generatorBtnBg.color = EftUiTemplateCache.ColorInsetBg;
             _generatorLed.color = EftUiTemplateCache.ColorAccentProducing;
         }
         else if (fuel.Type == EDetailsType.NoFuel)
         {
             _generatorBtnText.text = "发电机已关闭 (缺燃料)";
-            _generatorBtnBg.color = new Color(0.36f, 0.14f, 0.12f, 0.90f);
+            _generatorBtnBg.color = EftUiTemplateCache.ColorWarnBg;
             _generatorLed.color = EftUiTemplateCache.ColorAccentMissing;
         }
         else
         {
             _generatorBtnText.text = "发电机已关闭 (点击开启)";
-            _generatorBtnBg.color = new Color(0.26f, 0.16f, 0.12f, 0.90f);
+            _generatorBtnBg.color = EftUiTemplateCache.ColorWarnBg;
             _generatorLed.color = EftUiTemplateCache.ColorAccentReady;
         }
+    }
+
+    // Station rows are 32 tall with 2 spacing inside a scroll view padded by 2 top and bottom.
+    private const int MaxVisibleStationRows = 9;
+
+    private static float StationListHeight(int rows)
+    {
+        rows = Mathf.Clamp(rows, 1, MaxVisibleStationRows);
+        return rows * 32f + (rows - 1) * 2f + 4f;
     }
 
     private void RefreshStationRail()
     {
         int totalRows = 1 + _model.Stations.Count;
+        if (_stationHostLayout != null)
+        {
+            // Size the list to its rows so it only scrolls when there are more stations than fit.
+            float height = StationListHeight(totalRows);
+            if (!Mathf.Approximately(_stationHostLayout.preferredHeight, height))
+            {
+                _stationHostLayout.minHeight = height;
+                _stationHostLayout.preferredHeight = height;
+            }
+        }
         while (_stationRows.Count < totalRows)
         {
             _stationRows.Add(CreateStationRow(_stationListContent));
@@ -1042,7 +1170,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         row.TitleText.text = title;
         row.BadgeText.SetMonospaceText(badge, onlyDigits: true);
 
-        row.Background.color = selected ? EftUiTemplateCache.ColorRowSelected : EftUiTemplateCache.ColorRowIdle;
+        row.Tint.SetSelected(selected);
         row.TitleText.color = selected ? EftUiTemplateCache.ColorTextDark : EftUiTemplateCache.ColorTextPrimary;
         row.BadgeText.color = selected
             ? EftUiTemplateCache.ColorTextDark
@@ -1055,13 +1183,14 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         var go = new GameObject("StationRow", typeof(RectTransform), typeof(Image), typeof(Button), typeof(HorizontalLayoutGroup));
         go.transform.SetParent(parent, worldPositionStays: false);
-        EftUiTemplateCache.SetFixedLayout(go, height: 28f, flexW: -1f, flexH: 0f);
+        // Same metrics as the handbook ItemCategoryView row: 32 tall, bold 16 name, regular count.
+        EftUiTemplateCache.SetFixedLayout(go, height: 32f, flexW: -1f, flexH: 0f);
 
         Image bg = go.GetComponent<Image>();
         bg.color = EftUiTemplateCache.ColorRowIdle;
 
         var hlg = go.GetComponent<HorizontalLayoutGroup>();
-        hlg.padding = new RectOffset(8, 8, 2, 2);
+        hlg.padding = new RectOffset(12, 10, 2, 2);
         hlg.spacing = 6f;
         hlg.childAlignment = TextAnchor.MiddleLeft;
         hlg.childControlWidth = true;
@@ -1069,16 +1198,17 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         hlg.childForceExpandWidth = false;
         hlg.childForceExpandHeight = true;
 
-        TextMeshProUGUI title = _tpl.CreateText(go.transform, "Name", "", 13f, EftUiTemplateCache.ColorTextPrimary);
+        TextMeshProUGUI title = _tpl.CreateText(go.transform, "Name", "", EftUiTemplateCache.FontBody, EftUiTemplateCache.ColorTextPrimary, TextAlignmentOptions.Left, FontStyles.Bold);
         title.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
 
-        TextMeshProUGUI badge = _tpl.CreateText(go.transform, "Badge", "", 12f, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
-        EftUiTemplateCache.SetFixedLayout(badge.gameObject, width: 58f, height: 22f, flexW: 0f, flexH: 0f);
+        TextMeshProUGUI badge = _tpl.CreateText(go.transform, "Badge", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
+        EftUiTemplateCache.SetFixedLayout(badge.gameObject, width: 72f, height: 22f, flexW: 0f, flexH: 0f);
 
         var row = new StationRowView
         {
             Root = go,
             Background = bg,
+            Tint = HoverTint.Attach(go, bg),
             Button = go.GetComponent<Button>(),
             TitleText = title,
             BadgeText = badge,
@@ -1171,9 +1301,10 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         row.TitleText.text = title;
         row.CountText.SetMonospaceText(count.ToString(), onlyDigits: true);
 
-        row.Background.color = selected ? EftUiTemplateCache.ColorRowSelected : EftUiTemplateCache.ColorRowIdle;
+        row.Tint.SetSelected(selected);
+        row.TitleText.fontStyle = isSub ? FontStyles.Normal : FontStyles.Bold;
         row.TitleText.color = selected ? EftUiTemplateCache.ColorTextDark : (isSub ? EftUiTemplateCache.ColorTextSecondary : EftUiTemplateCache.ColorTextPrimary);
-        row.CountText.color = selected ? EftUiTemplateCache.ColorTextDark : EftUiTemplateCache.ColorTextMuted;
+        row.CountText.color = selected ? EftUiTemplateCache.ColorTextDark : EftUiTemplateCache.ColorTextSecondary;
     }
 
     private static void LoadCategoryIconAsync(CategoryRowView row, string iconPath, bool isSub)
@@ -1221,13 +1352,13 @@ internal sealed class HideoutWorkshopScreen : UIScreen
     {
         var go = new GameObject("CategoryRow", typeof(RectTransform), typeof(Image), typeof(Button), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
         go.transform.SetParent(parent, worldPositionStays: false);
-        go.GetComponent<LayoutElement>().preferredHeight = 26f;
+        go.GetComponent<LayoutElement>().preferredHeight = 30f;
 
         Image bg = go.GetComponent<Image>();
         bg.color = EftUiTemplateCache.ColorRowIdle;
 
         var hlg = go.GetComponent<HorizontalLayoutGroup>();
-        hlg.padding = new RectOffset(6, 8, 2, 2);
+        hlg.padding = new RectOffset(8, 10, 2, 2);
         hlg.spacing = 5f;
         hlg.childAlignment = TextAnchor.MiddleLeft;
         hlg.childControlWidth = true;
@@ -1251,22 +1382,23 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         var iconGo = new GameObject("CatIcon", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
         iconGo.transform.SetParent(go.transform, worldPositionStays: false);
         var iconLe = iconGo.GetComponent<LayoutElement>();
-        iconLe.preferredWidth = 18f;
-        iconLe.preferredHeight = 18f;
+        iconLe.preferredWidth = 22f;
+        iconLe.preferredHeight = 22f;
         Image catImg = iconGo.GetComponent<Image>();
         catImg.preserveAspect = true;
         catImg.raycastTarget = false;
 
-        TextMeshProUGUI title = _tpl.CreateText(go.transform, "Title", "", 13f, EftUiTemplateCache.ColorTextPrimary);
+        TextMeshProUGUI title = _tpl.CreateText(go.transform, "Title", "", 15f, EftUiTemplateCache.ColorTextPrimary);
         title.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
 
-        TextMeshProUGUI count = _tpl.CreateText(go.transform, "Count", "", 11.5f, EftUiTemplateCache.ColorTextMuted, TextAlignmentOptions.Right);
-        count.gameObject.AddComponent<LayoutElement>().minWidth = 28f;
+        TextMeshProUGUI count = _tpl.CreateText(go.transform, "Count", "", EftUiTemplateCache.FontSmall, EftUiTemplateCache.ColorTextSecondary, TextAlignmentOptions.Right);
+        count.gameObject.AddComponent<LayoutElement>().minWidth = 30f;
 
         var row = new CategoryRowView
         {
             Root = go,
             Background = bg,
+            Tint = HoverTint.Attach(go, bg),
             RowButton = go.GetComponent<Button>(),
             ArrowButton = arrowGo.GetComponent<Button>(),
             ArrowIcon = arrowImg,
@@ -1358,7 +1490,7 @@ internal sealed class HideoutWorkshopScreen : UIScreen
         {
             return;
         }
-        chip.Background.color = active ? EftUiTemplateCache.ColorRowSelected : EftUiTemplateCache.ColorRowIdle;
+        chip.Tint.SetSelected(active);
         chip.Label.color = active ? EftUiTemplateCache.ColorTextDark : EftUiTemplateCache.ColorTextPrimary;
     }
 

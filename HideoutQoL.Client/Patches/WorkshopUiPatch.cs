@@ -46,8 +46,9 @@ internal static class WorkshopUiPatch
     private static RagfairSearch _pendingHideoutRagfairSearch;
     private static float _pendingHideoutRagfairUntil = -1f;
 
+    // IsOpen turns false as soon as a close starts, so input is not swallowed during the fade-out.
     internal static bool IsWorkshopOpen =>
-        _workshopScreen != null && _workshopScreen.gameObject.activeSelf;
+        _workshopScreen != null && _workshopScreen.IsOpen;
 
     internal static void MarkHideoutRagfairSearch(RagfairSearch search)
     {
@@ -366,7 +367,7 @@ internal static class WorkshopUiPatch
     {
         if (_workshopScreen != null && _workshopScreen.gameObject.activeSelf)
         {
-            _workshopScreen.Close();
+            _workshopScreen.CloseSoft();
         }
 
         if (overlay != null && SelectedDataField?.GetValue(overlay) != null)

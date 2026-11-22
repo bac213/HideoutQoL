@@ -23,10 +23,16 @@ namespace HideoutQoL.Client.Patches;
 /// <summary>
 /// Granular wall-clock, CPU, pool, icon-cache, GC, and frame-hitch profiler for the entire
 /// Hideout crafting workflow (entry -> area open -> craft list load -> start craft -> collect).
-/// Active only when <see cref="HideoutQoLPlugin.PerfLogging"/> is enabled.
+/// The ~40 patches (several on hot paths such as <see cref="ItemController.RaiseEvent"/> and
+/// <see cref="StringExtensions.SetMonospaceText"/>) live on a separate Harmony instance and are only installed
+/// while <see cref="HideoutQoLPlugin.PerfLogging"/> is enabled, so the default config pays no trampoline cost.
 /// </summary>
 internal static class HideoutProfilerPatch
 {
+    private const string HarmonyId = HideoutQoLPlugin.PluginGuid + ".profiler";
+    private static Harmony _profilerHarmony;
+    private static bool _installed;
+
     private sealed class Counter
     {
         public int Count;
@@ -131,14 +137,113 @@ internal static class HideoutProfilerPatch
         HideoutQoLPlugin.Log.LogInfo($"[HideoutQoL Prof] {msg}");
     }
 
-    internal static void Apply(Harmony harmony)
+    /// <summary>
+    /// Installs the profiler now if <see cref="HideoutQoLPlugin.PerfLogging"/> is on, and installs/removes it
+    /// whenever the setting is toggled at runtime (F12).
+    /// </summary>
+    internal static void Init()
     {
-        // Attach hitch monitor
-        if (HideoutQoLPlugin.Instance != null && HideoutQoLPlugin.Instance.GetComponent<HideoutHitchMonitor>() == null)
+        HideoutQoLPlugin.PerfLogging.SettingChanged += (_, _) => SyncWithSetting();
+        SyncWithSetting();
+        if (!_installed)
         {
-            HideoutQoLPlugin.Instance.gameObject.AddComponent<HideoutHitchMonitor>();
+            HideoutQoLPlugin.Log.LogInfo("HideoutQoL: profiler dormant (patches install when PerfLogging is enabled)");
+        }
+    }
+
+    internal static void Shutdown()
+    {
+        SetHitchMonitorActive(false);
+        _profilerHarmony?.UnpatchSelf();
+        _installed = false;
+    }
+
+    private static void SyncWithSetting()
+    {
+        bool want = Enabled;
+        if (want == _installed)
+        {
+            return;
         }
 
+        if (want)
+        {
+            Install();
+        }
+        else
+        {
+            Uninstall();
+        }
+    }
+
+    private static void Install()
+    {
+        _profilerHarmony ??= new Harmony(HarmonyId);
+        ResetSessionState();
+        try
+        {
+            PatchAll(_profilerHarmony);
+        }
+        catch (Exception ex)
+        {
+            HideoutQoLPlugin.Log.LogError($"HideoutQoL: failed to install profiler patches: {ex}");
+            _profilerHarmony.UnpatchSelf();
+            return;
+        }
+
+        _installed = true;
+        SetHitchMonitorActive(true);
+        HideoutQoLPlugin.Log.LogInfo("HideoutQoL: profiler patches installed");
+    }
+
+    private static void Uninstall()
+    {
+        SetHitchMonitorActive(false);
+        _profilerHarmony?.UnpatchSelf();
+        _installed = false;
+        ResetSessionState();
+        HideoutQoLPlugin.Log.LogInfo("HideoutQoL: profiler patches removed");
+    }
+
+    private static void SetHitchMonitorActive(bool active)
+    {
+        HideoutQoLPlugin plugin = HideoutQoLPlugin.Instance;
+        if (plugin == null)
+        {
+            return;
+        }
+
+        HideoutHitchMonitor monitor = plugin.GetComponent<HideoutHitchMonitor>();
+        if (monitor == null)
+        {
+            if (!active)
+            {
+                return;
+            }
+            monitor = plugin.gameObject.AddComponent<HideoutHitchMonitor>();
+        }
+        monitor.enabled = active;
+    }
+
+    /// <summary>
+    /// Drops half-finished scopes and nesting depths so a later install never starts from state left by a
+    /// call that was in flight when the patches were removed.
+    /// </summary>
+    private static void ResetSessionState()
+    {
+        _activeLoad = null;
+        ActiveScopes.Clear();
+        _applyStashDepth = 0;
+        _handoverShowDepth = 0;
+        _handoverUpdateItemsMs = 0.0;
+        _handoverGridUpdateMs = 0.0;
+        StashRaiseAdd.Reset();
+        StashRaiseRemove.Reset();
+        StashRaiseRefresh.Reset();
+    }
+
+    private static void PatchAll(Harmony harmony)
+    {
         // 1) Hideout entry
         PatchPair(harmony, AccessTools.Method(typeof(TarkovApplication.HideoutController), "method_2"),
             nameof(HideoutLoad2Prefix), nameof(HideoutLoad2Postfix));
@@ -1218,7 +1323,8 @@ internal sealed class HideoutHitchMonitor : MonoBehaviour
     private int _prevGc1;
     private int _prevGc2;
 
-    private void Awake()
+    // Enabled only while the profiler is installed (see HideoutProfilerPatch.SetHitchMonitorActive).
+    private void OnEnable()
     {
         _prevGc0 = GC.CollectionCount(0);
         _prevGc1 = GC.CollectionCount(1);
@@ -1227,6 +1333,11 @@ internal sealed class HideoutHitchMonitor : MonoBehaviour
 
     private void Update()
     {
+        if (HideoutQoLPlugin.PerfLogging == null || !HideoutQoLPlugin.PerfLogging.Value)
+        {
+            return;
+        }
+
         int g0 = GC.CollectionCount(0);
         int g1 = GC.CollectionCount(1);
         int g2 = GC.CollectionCount(2);
@@ -1236,11 +1347,6 @@ internal sealed class HideoutHitchMonitor : MonoBehaviour
         _prevGc0 = g0;
         _prevGc1 = g1;
         _prevGc2 = g2;
-
-        if (HideoutQoLPlugin.PerfLogging == null || !HideoutQoLPlugin.PerfLogging.Value)
-        {
-            return;
-        }
 
         float dtMs = Time.unscaledDeltaTime * 1000f;
         if (dtMs >= 80f && HideoutProfilerPatch.IsRecentlyInHideout())
