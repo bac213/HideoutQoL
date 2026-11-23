@@ -48,3 +48,7 @@ dotnet build -c Release HideoutQoL.Client/HideoutQoL.Client.csproj
 ```
 
 编译产物位于 `HideoutQoL.Client/bin/Release/HideoutQoL.Client.dll`。
+
+## 许可证
+
+本项目以 **CC0 1.0 Universal** 协议放弃版权并奉献至公共领域，详见 [LICENSE](LICENSE)。
