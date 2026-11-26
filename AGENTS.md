@@ -65,6 +65,6 @@ cp HideoutQoL.Client/bin/Release/HideoutQoL.Client.dll E:/SPT/BepInEx/plugins/
 ```
 
 Verify in `E:/SPT/BepInEx/LogOutput.log`:
-- `HideoutQoL 0.2.0 loaded`
+- `HideoutQoL 0.2.1 loaded`
 - Ten `HideoutQoL: patched ...` lines with zero errors.
 - Optional perf diagnostics: enable **F12 → HideoutQoL → 9. 调试 → 输出性能统计日志**.

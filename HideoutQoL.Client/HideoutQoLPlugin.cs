@@ -12,7 +12,7 @@ public sealed class HideoutQoLPlugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.spt.hideoutqol.client";
     public const string PluginName = "HideoutQoL";
-    public const string PluginVersion = "0.2.0";
+    public const string PluginVersion = "0.2.1";
 
     internal static ManualLogSource Log { get; private set; }
     internal static HideoutQoLPlugin Instance { get; private set; }
