@@ -254,6 +254,11 @@ internal static class HideoutBackdropPatch
         HideoutQoLPlugin.MenuBackdropBlur.SettingChanged += OnBackdropSettingChanged;
         HideoutQoLPlugin.HideoutAudioInMainMenu.SettingChanged += OnBackdropSettingChanged;
         HideoutQoLPlugin.KeepHideoutBackdropInSubScreens.SettingChanged += OnBackdropSettingChanged;
+
+        MethodInfo collectMemory = AccessTools.Method(
+            typeof(InGameMemoryManagement), nameof(InGameMemoryManagement.Collect),
+            new[] { typeof(int), typeof(GCCollectionMode), typeof(bool), typeof(bool), typeof(bool) });
+        harmony.Patch(collectMemory, prefix: new HarmonyMethod(typeof(HideoutBackdropPatch), nameof(CollectMemoryPrefix)));
     }
 
     private static void OnBackdropSettingChanged(object sender, EventArgs e)
@@ -488,6 +493,20 @@ internal static class HideoutBackdropPatch
     }
 
     // --- 3) Loading Screen Suppression & GC / Audio Guards ---
+
+    private static bool CollectMemoryPrefix(GCCollectionMode gcMode, bool compacting, bool force, ref float __result)
+    {
+        // PrepareSession calls Collect(true), which reaches this overload with Optimized and compacting=false.
+        if (!_suppressLoadingScreen || !force || gcMode != GCCollectionMode.Optimized || compacting
+            || !Singleton<AbstractGame>.Instantiated || !(Singleton<AbstractGame>.Instance is HideoutGame))
+        {
+            return true;
+        }
+
+        __result = 0f;
+        HideoutQoLPlugin.DebugPerf("Skipping forced GC for silent Hideout initialization");
+        return false;
+    }
 
     private static bool HideoutLoadingShowPrefix()
     {
