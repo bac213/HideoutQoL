@@ -230,12 +230,6 @@ internal static class HideoutBackdropPatch
             harmony.Patch(camLateUpdate, prefix: new HarmonyMethod(typeof(HideoutBackdropPatch), nameof(HideoutCameraLateUpdatePrefix)));
         }
 
-        MethodInfo rearClose = AccessTools.Method(typeof(HideoutScreenRear), nameof(HideoutScreenRear.Close));
-        if (rearClose != null)
-        {
-            harmony.Patch(rearClose, postfix: new HarmonyMethod(typeof(HideoutBackdropPatch), nameof(HideoutScreenRearClosePostfix)));
-        }
-
         // 10) MenuScreen translucent overlay & scrim lifecycle
         MethodInfo menuShow = AccessTools.Method(
             typeof(MenuScreen),
@@ -405,7 +399,9 @@ internal static class HideoutBackdropPatch
             }
 
             // If player already clicked into Hideout while silent load was running, don't hijack their session
-            bool userAlreadyInHideout = EftScreenManager.Instance.CheckCurrentScreen(EEftScreenType.Hideout)
+            EEftScreenType currentScreen = GetCurrentScreenType();
+            bool userAlreadyInHideout = currentScreen == EEftScreenType.Hideout
+                || IsHideoutOverlayScreen()
                 || hc._playerOwner.IsGuest;
 
             if (!userAlreadyInHideout)
@@ -445,9 +441,10 @@ internal static class HideoutBackdropPatch
             sw.Stop();
             HideoutQoLPlugin.DebugPerf($"SilentHideoutBootstrap ready in {sw.Elapsed.TotalMilliseconds:F0}ms");
 
-            if (!EftScreenManager.Instance.CheckCurrentScreen(EEftScreenType.Hideout))
+            currentScreen = GetCurrentScreenType();
+            if (currentScreen != EEftScreenType.Hideout)
             {
-                SyncBackdropForScreen(GetCurrentScreenType());
+                SyncBackdropForScreen(currentScreen);
             }
         }
         catch (Exception ex)
@@ -728,6 +725,27 @@ internal static class HideoutBackdropPatch
         return ctrl != null ? ctrl.ScreenType : EEftScreenType.None;
     }
 
+    private static bool IsHideoutOverlayScreen()
+    {
+        var controller = EftScreenManager.Instance.CurrentBaseScreenController;
+        if (controller is InventoryScreen.HideoutInventoryScreenController
+            || controller is EftBattleUIScreen.HideoutBattleUIScreenController)
+        {
+            return true;
+        }
+
+        while (controller != null && !controller.Root)
+        {
+            controller = controller.PreviousScreen;
+            if (controller?.ScreenType == EEftScreenType.Hideout)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool ShouldUseHideoutBackdrop(EEftScreenType screenType)
     {
         if (!FeatureActive || !_backdropReady || _inNarrateScene || IsInRaidSession())
@@ -743,6 +761,11 @@ internal static class HideoutBackdropPatch
         if (screenType == EEftScreenType.Hideout || screenType == EEftScreenType.None)
         {
             return true;
+        }
+
+        if (IsHideoutOverlayScreen())
+        {
+            return false;
         }
 
         if (screenType == EEftScreenType.MainMenu)
@@ -799,21 +822,16 @@ internal static class HideoutBackdropPatch
         return GetCurrentScreenType() == EEftScreenType.Hideout;
     }
 
-    private static void HideoutScreenRearClosePostfix()
-    {
-        if (FeatureActive && _backdropReady && !_inNarrateScene && !IsInRaidSession())
-        {
-            Camera cam = CameraManager.Instance.Camera;
-            if (cam != null && ShouldUseHideoutBackdrop(GetCurrentScreenType()))
-            {
-                cam.clearFlags = CameraClearFlags.Color;
-            }
-        }
-    }
-
     private static void SyncBackdropForScreen(EEftScreenType screenType)
     {
         if (IsInRaidSession() || _inNarrateScene || screenType == EEftScreenType.None)
+        {
+            return;
+        }
+
+        // Screens stacked on Hideout can return to the player's current view.
+        // Leave their camera and input transitions to the game.
+        if (IsHideoutOverlayScreen())
         {
             return;
         }
